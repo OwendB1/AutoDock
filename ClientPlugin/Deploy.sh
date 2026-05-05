@@ -8,6 +8,7 @@ fi
 
 NAME=$1
 SOURCE=${2%/}
+BIN64=${3:-}
 
 if [ -f "$SOURCE/$NAME" ]; then
     SRCFILE=$SOURCE/$NAME
@@ -24,15 +25,32 @@ find_plugin_dir() {
         return
     fi
 
+    if [ -n "$BIN64" ]; then
+        GAME_DIR=$(dirname "${BIN64%/}")
+        if [ -d "$GAME_DIR/Pulsar/Legacy/Local" ]; then
+            printf '%s\n' "$GAME_DIR/Pulsar/Legacy/Local"
+            return
+        fi
+        if [ -d "$GAME_DIR/Pulsar/Local" ]; then
+            printf '%s\n' "$GAME_DIR/Pulsar/Local"
+            return
+        fi
+    fi
+
     if [ -n "${APPDATA:-}" ] && [ -d "$APPDATA/Pulsar/Legacy/Local" ]; then
         printf '%s\n' "$APPDATA/Pulsar/Legacy/Local"
         return
     fi
 
     for candidate in \
+        "$HOME/.local/share/Steam/steamapps/common/SpaceEngineers/Pulsar/Legacy/Local" \
+        "$HOME/.local/share/Steam/steamapps/common/SpaceEngineers/Pulsar/Local" \
+        "$HOME/.config/Pulsar/Local" \
         "$HOME/.config/Pulsar/Legacy/Local" \
         "$HOME/.steam/steam/steamapps/compatdata/244850/pfx/drive_c/users/steamuser/AppData/Roaming/Pulsar/Legacy/Local" \
+        "$HOME/.steam/steam/steamapps/compatdata/244850/pfx/drive_c/users/steamuser/AppData/Roaming/Pulsar/Local" \
         "$HOME/.local/share/Steam/steamapps/compatdata/244850/pfx/drive_c/users/steamuser/AppData/Roaming/Pulsar/Legacy/Local" \
+        "$HOME/.local/share/Steam/steamapps/compatdata/244850/pfx/drive_c/users/steamuser/AppData/Roaming/Pulsar/Local" \
         "$HOME/.var/app/com.valvesoftware.Steam/.local/share/Steam/steamapps/compatdata/244850/pfx/drive_c/users/steamuser/AppData/Roaming/Pulsar/Legacy/Local"
     do
         if [ -d "$candidate" ]; then
@@ -41,7 +59,7 @@ find_plugin_dir() {
         fi
     done
 
-    printf '%s\n' "$HOME/.config/Pulsar/Legacy/Local"
+    printf '%s\n' "$HOME/.config/Pulsar/Local"
 }
 
 PLUGIN_DIR=$(find_plugin_dir)

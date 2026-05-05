@@ -5,16 +5,16 @@
     <Id>658B3FB9-A66D-4CA5-A998-FCA7033CFCCA</Id>
 
     <!-- GitHub repository ID -->
-    <RepoId>todo-github-user/project-name</RepoId>
+    <RepoId>OwendB1/AutoDock</RepoId>
 
     <!-- The name of your plugin that will appear in the plugin list -->
-    <FriendlyName>TODO AutoDock</FriendlyName>
+    <FriendlyName>AutoDock</FriendlyName>
 
     <!-- The author name that you want to appear in the plugin list -->
-    <Author>TODO Author Name</Author>
+    <Author>OwendB</Author>
 
     <!-- Optional tooltip for the plugin in the plugin list -->
-    <Tooltip>TODO Short description</Tooltip>
+    <Tooltip>Backport of SE2 auto docking feature</Tooltip>
 
     <!-- Optional plugin description. If omitted, this will be the same as the Tooltip. 1000 characters max. -->
     <Description>TODO Long description, multiple lines.

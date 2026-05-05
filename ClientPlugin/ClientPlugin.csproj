@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net48</TargetFramework>
+    <TargetFramework>net481</TargetFramework>
     <OutputType>Library</OutputType>
     <RootNamespace>ClientPlugin</RootNamespace>
     <AssemblyName>AutoDock</AssemblyName>
@@ -667,11 +667,11 @@
 
   <Target Name="DeployPlugin" AfterTargets="Build" Condition="'$(RunPostBuildEvent)' != 'Never'">
     <PropertyGroup>
-      <DeploySourceDir>$(MSBuildProjectDirectory)$(PathSeparator)$(OutputPath)$(TargetFramework)</DeploySourceDir>
+      <DeploySourceDir>$(TargetDir)</DeploySourceDir>
     </PropertyGroup>
     <Exec Condition="$([MSBuild]::IsOSPlatform('Windows'))"
-          Command="call &quot;$(MSBuildProjectDirectory)\Deploy.bat&quot; &quot;$(AssemblyName).dll&quot; &quot;$(DeploySourceDir)&quot;" />
+          Command="call &quot;$(MSBuildProjectDirectory)\Deploy.bat&quot; &quot;$(AssemblyName).dll&quot; &quot;$(DeploySourceDir)&quot; &quot;$(Bin64Dir)&quot;" />
     <Exec Condition="!$([MSBuild]::IsOSPlatform('Windows'))"
-          Command="sh &quot;$(MSBuildProjectDirectory)/Deploy.sh&quot; &quot;$(AssemblyName).dll&quot; &quot;$(DeploySourceDir)&quot;" />
+          Command="sh &quot;$(MSBuildProjectDirectory)/Deploy.sh&quot; &quot;$(AssemblyName).dll&quot; &quot;$(DeploySourceDir)&quot; &quot;$(Bin64Dir)&quot;" />
   </Target>
 </Project>
