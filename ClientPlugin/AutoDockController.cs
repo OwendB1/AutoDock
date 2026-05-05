@@ -3,6 +3,7 @@ using System.Collections.Generic;
 using ClientPlugin.Settings.Tools;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
+using Sandbox.Game.GameSystems;
 using Sandbox.Game.Gui;
 using Sandbox.Game.World;
 using Sandbox.Graphics.GUI;
@@ -30,6 +31,7 @@ internal sealed class AutoDockController
     private const double AutoDockFinalLateralDistance = 1.35;
     private const double AutoDockFinalForwardDistance = 1.1;
     private const double AutoDockInputDeadzone = 0.12;
+    private const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
     private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
@@ -160,6 +162,12 @@ internal sealed class AutoDockController
         }
         else
         {
+            if (TryGetGravityTiltWarning(pair, out string warning))
+            {
+                Notify(warning, "Red");
+                return;
+            }
+
             StartAutoDock(pair);
         }
     }
@@ -567,6 +575,35 @@ internal sealed class AutoDockController
         return Vector3D.Zero;
     }
 
+    private static bool TryGetGravityTiltWarning(DockingPair pair, out string warning)
+    {
+        warning = null;
+        if (!TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
+            return false;
+
+        Vector3D gravity = controller.GetNaturalGravity();
+        if (gravity.LengthSquared() < MinConnectorDistanceSquared)
+            return false;
+
+        if (!TryGetGridRotationTarget(pair, out MatrixD targetOrientation))
+            return false;
+
+        MatrixD desiredControllerMatrix = GetDesiredControllerWorldMatrix(controller, pair.Local.CubeGrid, targetOrientation);
+        Vector3D desiredControllerUp = desiredControllerMatrix.Up;
+        if (desiredControllerUp.LengthSquared() < MinConnectorDistanceSquared)
+            return false;
+
+        desiredControllerUp.Normalize();
+        Vector3D gravityUp = -Vector3D.Normalize(gravity);
+        double dot = MathHelper.Clamp(Vector3D.Dot(desiredControllerUp, gravityUp), -1.0, 1.0);
+        double tiltAngle = Math.Acos(dot);
+        if (tiltAngle <= MaxGravityTiltWarningRadians)
+            return false;
+
+        warning = $"AutoDock: docking needs {MathHelper.ToDegrees((float)tiltAngle):0} deg cockpit tilt from gravity. Move ship first.";
+        return true;
+    }
+
     private static Vector3D GetDesiredRollReference(MyShipConnector targetConnector, MyCubeGrid localGrid)
     {
         Vector3D gravity = GetGravityVector(localGrid);
@@ -578,6 +615,12 @@ internal sealed class AutoDockController
             return Vector3D.Normalize(connectorUp);
 
         return Vector3D.Up;
+    }
+
+    private static MatrixD GetDesiredControllerWorldMatrix(MyShipController controller, MyCubeGrid grid, MatrixD targetGridMatrix)
+    {
+        MatrixD controllerLocalMatrix = controller.PositionComp.LocalMatrixRef;
+        return controllerLocalMatrix * targetGridMatrix;
     }
 
     private static QuaternionD CreateRotationBetweenVectors(Vector3D from, Vector3D to, Vector3D fallbackAxis)
@@ -619,48 +662,152 @@ internal sealed class AutoDockController
 
     private static void ApplyAutoDockControl(DockingPair pair, MyShipController controller, DockingTarget target)
     {
-        MatrixD controllerMatrix = controller.WorldMatrix;
+        MyCubeGrid grid = pair.Local.CubeGrid;
+        MyEntityThrustComponent thrustComponent = controller.EntityThrustComponent;
+        MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
+        MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
+        MatrixD inverseGridMatrix = grid.PositionComp.WorldMatrixNormalizedInv;
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
         Vector3D targetVelocity = pair.Target.CubeGrid.Physics.LinearVelocity;
         Vector3D currentVelocity = pair.Local.CubeGrid.Physics.LinearVelocity;
         Vector3D relativeVelocity = currentVelocity - targetVelocity;
+        float shipMass = controller.CalculateShipMass().PhysicalMass;
 
         Vector3D positionError = target.ConstraintPosition - currentConstraintPosition;
-        Vector3 localPositionError = new Vector3(
-            (float)Vector3D.Dot(positionError, controllerMatrix.Right),
-            (float)Vector3D.Dot(positionError, controllerMatrix.Up),
-            (float)Vector3D.Dot(positionError, controllerMatrix.Forward));
-        Vector3 localVelocity = new Vector3(
-            (float)Vector3D.Dot(relativeVelocity, controllerMatrix.Right),
-            (float)Vector3D.Dot(relativeVelocity, controllerMatrix.Up),
-            (float)Vector3D.Dot(relativeVelocity, controllerMatrix.Forward));
+        Vector3D localPositionErrorD = Vector3D.TransformNormal(positionError, inverseGridMatrix);
+        Vector3D localVelocityD = Vector3D.TransformNormal(relativeVelocity, inverseGridMatrix);
+        Vector3 localPositionError = new Vector3((float)localPositionErrorD.X, (float)localPositionErrorD.Y, (float)localPositionErrorD.Z);
+        Vector3 localVelocity = new Vector3((float)localVelocityD.X, (float)localVelocityD.Y, (float)localVelocityD.Z);
 
         float maxSpeed = target.FinalApproach ? 1.25f : 6f;
         float maxCommand = target.FinalApproach ? 0.35f : 1f;
         Vector3 desiredLocalVelocity = Vector3.Clamp(localPositionError * 0.65f, new Vector3(-maxSpeed), new Vector3(maxSpeed));
-        Vector3 moveIndicator = Vector3.Clamp((desiredLocalVelocity - localVelocity) * 0.3f, new Vector3(-maxCommand), new Vector3(maxCommand));
+        Vector3 desiredLocalAcceleration = Vector3.Clamp((desiredLocalVelocity - localVelocity) * 1.6f, new Vector3(-6f * maxCommand), new Vector3(6f * maxCommand));
+        Vector3 localForceCommand = desiredLocalAcceleration * shipMass;
 
-        MatrixD desiredControllerMatrix = GetDesiredControllerMatrix(controller, pair.Local.CubeGrid, target.WorldMatrix);
-        Vector3D orientationError = GetOrientationErrorVector(controllerMatrix, desiredControllerMatrix);
-        Vector3D angularVelocity = pair.Local.CubeGrid.Physics.AngularVelocity;
+        Vector3D gravity = controller.GetNaturalGravity();
+        if (gravity.LengthSquared() > MinConnectorDistanceSquared)
+        {
+            Vector3D localGravityD = Vector3D.TransformNormal(gravity, inverseGridMatrix);
+            Vector3 localGravity = new Vector3((float)localGravityD.X, (float)localGravityD.Y, (float)localGravityD.Z);
+            localForceCommand -= localGravity * shipMass;
+
+            Vector3D gravityUp = -Vector3D.Normalize(gravity);
+            float verticalError = (float)Vector3D.Dot(positionError, gravityUp);
+            float verticalVelocity = (float)Vector3D.Dot(relativeVelocity, gravityUp);
+            float desiredVerticalSpeed = MathHelper.Clamp(verticalError * 0.65f, -Math.Max(1.5f, maxSpeed), maxSpeed);
+            bool allowGravityDescent = verticalError < -0.25f && verticalVelocity > desiredVerticalSpeed - 0.2f;
+            if (allowGravityDescent)
+            {
+                Vector3D worldForceCommand = Vector3D.TransformNormal(localForceCommand, currentGridMatrix);
+                double upwardForce = Vector3D.Dot(worldForceCommand, gravityUp);
+                if (upwardForce > 0.0)
+                {
+                    worldForceCommand -= gravityUp * upwardForce;
+                    Vector3D adjustedLocalForceD = Vector3D.TransformNormal(worldForceCommand, inverseGridMatrix);
+                    localForceCommand = new Vector3((float)adjustedLocalForceD.X, (float)adjustedLocalForceD.Y, (float)adjustedLocalForceD.Z);
+                }
+            }
+        }
+
+        Vector3D orientationError = GetOrientationErrorVector(currentGridMatrix, target.WorldMatrix);
+        Vector3D angularVelocity = grid.Physics.AngularVelocity;
         Vector3D worldTorque = orientationError * 3.0 - angularVelocity * 0.35;
-        Vector3 localTorque = new Vector3(
-            (float)Vector3D.Dot(worldTorque, controllerMatrix.Right),
-            (float)Vector3D.Dot(worldTorque, controllerMatrix.Up),
-            (float)Vector3D.Dot(worldTorque, controllerMatrix.Forward));
+        Vector3D localTorqueD = Vector3D.TransformNormal(worldTorque, inverseGridMatrix);
+        Vector3 localTorque = new Vector3((float)localTorqueD.X, (float)localTorqueD.Y, (float)localTorqueD.Z);
+        localTorque = Vector3.Clamp(localTorque, -Vector3.One, Vector3.One);
 
-        Vector2 rotationIndicator = new Vector2(
-            MathHelper.Clamp(-localTorque.X * 20f, -6f, 6f),
-            MathHelper.Clamp(-localTorque.Y * 20f, -6f, 6f));
-        float rollIndicator = MathHelper.Clamp(-localTorque.Z / 0.2f, -5f, 5f);
+        if (controller is Sandbox.ModAPI.Ingame.IMyShipController shipController)
+        {
+            shipController.ControlThrusters = true;
+            shipController.DampenersOverride = false;
+        }
+        controller.ControlGyros = true;
 
-        controller.MoveAndRotate(moveIndicator, rotationIndicator, rollIndicator);
+        if (thrustComponent != null)
+        {
+            thrustComponent.AutoPilotControlThrust = Vector3.Zero;
+            thrustComponent.AutopilotEnabled = false;
+            thrustComponent.Enabled = true;
+            thrustComponent.MarkDirty();
+        }
+
+        ApplyThrustOverrides(grid, localForceCommand);
+
+        if (gyroSystem != null)
+        {
+            gyroSystem.AutopilotEnabled = true;
+            gyroSystem.ControlTorque = localTorque;
+        }
     }
 
-    private static MatrixD GetDesiredControllerMatrix(MyShipController controller, MyCubeGrid grid, MatrixD targetGridMatrix)
+    private static void ApplyThrustOverrides(MyCubeGrid grid, Vector3 desiredLocalForce)
     {
-        MatrixD controllerToGrid = controller.WorldMatrix * MatrixD.Invert(grid.PositionComp.WorldMatrixRef);
-        return controllerToGrid * targetGridMatrix;
+        const int DirectionCount = 6;
+        var totalForceByDirection = new float[DirectionCount];
+        var requestedForceByDirection = new float[DirectionCount];
+
+        foreach (MyThrust thruster in grid.GetFatBlocks<MyThrust>())
+        {
+            if (thruster == null || thruster.MarkedForClose || !thruster.IsWorking)
+                continue;
+
+            int directionIndex = GetDirectionIndex(-thruster.ThrustForwardVector);
+            if (directionIndex < 0)
+                continue;
+
+            totalForceByDirection[directionIndex] += ((Sandbox.ModAPI.Ingame.IMyThrust)thruster).MaxEffectiveThrust;
+        }
+
+        requestedForceByDirection[0] = Math.Max(0f, desiredLocalForce.X);
+        requestedForceByDirection[1] = Math.Max(0f, -desiredLocalForce.X);
+        requestedForceByDirection[2] = Math.Max(0f, desiredLocalForce.Y);
+        requestedForceByDirection[3] = Math.Max(0f, -desiredLocalForce.Y);
+        requestedForceByDirection[4] = Math.Max(0f, desiredLocalForce.Z);
+        requestedForceByDirection[5] = Math.Max(0f, -desiredLocalForce.Z);
+
+        foreach (MyThrust thruster in grid.GetFatBlocks<MyThrust>())
+        {
+            if (thruster == null || thruster.MarkedForClose || !thruster.IsWorking)
+                continue;
+
+            int directionIndex = GetDirectionIndex(-thruster.ThrustForwardVector);
+            if (directionIndex < 0)
+            {
+                thruster.ThrustOverride = 0f;
+                continue;
+            }
+
+            float totalDirectionForce = totalForceByDirection[directionIndex];
+            float requestedDirectionForce = requestedForceByDirection[directionIndex];
+            if (totalDirectionForce <= 0f || requestedDirectionForce <= 0f)
+            {
+                thruster.ThrustOverride = 0f;
+                continue;
+            }
+
+            float thrusterMaxForce = ((Sandbox.ModAPI.Ingame.IMyThrust)thruster).MaxEffectiveThrust;
+            float assignedForce = Math.Min(thrusterMaxForce, requestedDirectionForce * (thrusterMaxForce / totalDirectionForce));
+            thruster.ThrustOverride = assignedForce;
+        }
+    }
+
+    private static int GetDirectionIndex(Vector3I direction)
+    {
+        if (direction.X > 0)
+            return 0;
+        if (direction.X < 0)
+            return 1;
+        if (direction.Y > 0)
+            return 2;
+        if (direction.Y < 0)
+            return 3;
+        if (direction.Z > 0)
+            return 4;
+        if (direction.Z < 0)
+            return 5;
+
+        return -1;
     }
 
     private static Vector3D GetOrientationErrorVector(MatrixD currentMatrix, MatrixD targetMatrix)
@@ -676,7 +823,36 @@ internal sealed class AutoDockController
             return;
 
         if (TryGetActiveShipController(grid, out MyShipController controller))
+        {
             controller.MoveAndRotateStopped();
+            if (controller is Sandbox.ModAPI.Ingame.IMyShipController shipController)
+            {
+                shipController.DampenersOverride = true;
+            }
+        }
+
+        MyEntityThrustComponent thrustComponent = grid.Components?.Get<MyEntityThrustComponent>();
+        if (thrustComponent != null)
+        {
+            thrustComponent.AutoPilotControlThrust = Vector3.Zero;
+            thrustComponent.AutopilotEnabled = false;
+            thrustComponent.Enabled = true;
+            thrustComponent.MarkDirty();
+        }
+
+        foreach (MyThrust thruster in grid.GetFatBlocks<MyThrust>())
+        {
+            if (thruster != null && !thruster.MarkedForClose)
+                thruster.ThrustOverride = 0f;
+        }
+
+        MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
+        if (gyroSystem != null)
+        {
+            gyroSystem.ControlTorque = Vector3.Zero;
+            gyroSystem.AutopilotEnabled = false;
+            gyroSystem.MarkDirty();
+        }
     }
 
     private void DrawPairs()
