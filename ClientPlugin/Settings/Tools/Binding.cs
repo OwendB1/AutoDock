@@ -1,4 +1,6 @@
 using VRage.Input;
+using VRage.ModAPI;
+using IMyVrageInput = VRage.Input.IMyInput;
 
 namespace ClientPlugin.Settings.Tools;
 
@@ -28,10 +30,22 @@ public struct Binding
         return $"{ctrl}{alt}{shift}{Key}";
     }
 
-    public bool IsPressed(IMyInput input) => Key != MyKeys.None && AreModifiersMatch(input) && input.IsKeyPress(Key);
-    public bool HasPressed(IMyInput input) => Key != MyKeys.None && AreModifiersMatch(input) && input.IsNewKeyPressed(Key);
+    public bool IsPressed(IMyVrageInput input) => Key != MyKeys.None && AreModifiersMatch(input) && input.IsKeyPress(Key);
+    public bool HasPressed(IMyVrageInput input) => Key != MyKeys.None && AreModifiersMatch(input) && input.IsNewKeyPressed(Key);
 
-    private bool AreModifiersMatch(IMyInput input)
+    public MyKeyboardModifiers ToKeyboardModifiers()
+    {
+        var modifiers = MyKeyboardModifiers.None;
+        if (Ctrl)
+            modifiers |= MyKeyboardModifiers.Control;
+        if (Alt)
+            modifiers |= MyKeyboardModifiers.Alt;
+        if (Shift)
+            modifiers |= MyKeyboardModifiers.Shift;
+        return modifiers;
+    }
+
+    private bool AreModifiersMatch(IMyVrageInput input)
     {
         return input.IsAnyCtrlKeyPressed() == Ctrl &&
                input.IsAnyAltKeyPressed() == Alt &&

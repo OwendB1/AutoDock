@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ClientPlugin.Settings.Tools;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.Gui;
@@ -9,6 +10,7 @@ using Sandbox.ModAPI.Ingame;
 using VRage.Game;
 using VRage.Game.Entity;
 using VRage.Input;
+using VRage.Utils;
 using VRageMath;
 using VRageRender;
 
@@ -20,11 +22,20 @@ internal sealed class AutoDockController
     private const float MinSearchRadius = 1f;
     private const float MaxSearchRadius = 10f;
     private const double MinConnectorDistanceSquared = 0.0001;
+    private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
+    private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
+    private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
 
     private readonly List<DockingPair> pairs = new List<DockingPair>();
     private readonly List<MyShipConnector> localConnectors = new List<MyShipConnector>();
     private readonly HashSet<PairKey> pairKeys = new HashSet<PairKey>();
 
+    private Binding registeredActivationKeybind = new Binding(MyKeys.None);
+    private Binding registeredPreviousPairKeybind = new Binding(MyKeys.None);
+    private Binding registeredNextPairKeybind = new Binding(MyKeys.None);
+    private MyControl activationControl;
+    private MyControl previousPairControl;
+    private MyControl nextPairControl;
     private bool active;
     private int selectedIndex = -1;
     private int framesUntilRescan;
@@ -37,13 +48,15 @@ internal sealed class AutoDockController
             return;
         }
 
+        IMyInput input = MyInput.Static;
+        EnsureGameControls(input);
+
         if (MyScreenManager.GetScreenWithFocus() != null)
         {
             DrawPairs();
             return;
         }
 
-        IMyInput input = MyInput.Static;
         if (IsActivationPressed(input))
         {
             HandleActivationPressed();
@@ -78,6 +91,7 @@ internal sealed class AutoDockController
     public void Dispose()
     {
         ClearSelection();
+        UnregisterGameControls();
     }
 
     private void HandleActivationPressed()
@@ -389,19 +403,119 @@ internal sealed class AutoDockController
         return MathHelper.Clamp(radius, MinSearchRadius, MaxSearchRadius);
     }
 
-    private static bool IsActivationPressed(IMyInput input)
+    private void EnsureGameControls(IMyInput input)
     {
-        return Config.Current.ActivationKeybind.HasPressed(input);
+        bool changed = false;
+        changed |= EnsureGameControl(
+            input,
+            ActivationControlId,
+            "AutoDock Activate Docking",
+            Config.Current.ActivationKeybind,
+            ref registeredActivationKeybind,
+            ref activationControl);
+        changed |= EnsureGameControl(
+            input,
+            PreviousPairControlId,
+            "AutoDock Previous Pair",
+            Config.Current.PreviousPairKeybind,
+            ref registeredPreviousPairKeybind,
+            ref previousPairControl);
+        changed |= EnsureGameControl(
+            input,
+            NextPairControlId,
+            "AutoDock Next Pair",
+            Config.Current.NextPairKeybind,
+            ref registeredNextPairKeybind,
+            ref nextPairControl);
+
+        if (changed)
+            input.CreateKeyControlsPriorityMap();
     }
 
-    private static bool IsCyclePreviousPressed(IMyInput input)
+    private void UnregisterGameControls()
     {
-        return Config.Current.PreviousPairKeybind.HasPressed(input);
+        IMyInput input = MyInput.Static;
+        if (input == null)
+            return;
+
+        var unbound = new Binding(MyKeys.None);
+        bool changed = false;
+        changed |= EnsureGameControl(
+            input,
+            ActivationControlId,
+            "AutoDock Activate Docking",
+            unbound,
+            ref registeredActivationKeybind,
+            ref activationControl);
+        changed |= EnsureGameControl(
+            input,
+            PreviousPairControlId,
+            "AutoDock Previous Pair",
+            unbound,
+            ref registeredPreviousPairKeybind,
+            ref previousPairControl);
+        changed |= EnsureGameControl(
+            input,
+            NextPairControlId,
+            "AutoDock Next Pair",
+            unbound,
+            ref registeredNextPairKeybind,
+            ref nextPairControl);
+
+        if (changed)
+            input.CreateKeyControlsPriorityMap();
     }
 
-    private static bool IsCycleNextPressed(IMyInput input)
+    private static bool EnsureGameControl(
+        IMyInput input,
+        MyStringId controlId,
+        string displayName,
+        Binding binding,
+        ref Binding registeredBinding,
+        ref MyControl control)
     {
-        return Config.Current.NextPairKeybind.HasPressed(input);
+        if (control != null && BindingsEqual(registeredBinding, binding))
+            return false;
+
+        control = new MyControl(
+            controlId,
+            MyStringId.GetOrCompute(displayName),
+            MyGuiControlTypeEnum.General,
+            null,
+            binding.Key,
+            keyModifiers: binding.ToKeyboardModifiers());
+
+        input.AddDefaultControl(controlId, control);
+        registeredBinding = binding;
+        return true;
+    }
+
+    private bool IsActivationPressed(IMyInput input)
+    {
+        return IsControlNewPressed(activationControl, Config.Current.ActivationKeybind, input);
+    }
+
+    private bool IsCyclePreviousPressed(IMyInput input)
+    {
+        return IsControlNewPressed(previousPairControl, Config.Current.PreviousPairKeybind, input);
+    }
+
+    private bool IsCycleNextPressed(IMyInput input)
+    {
+        return IsControlNewPressed(nextPairControl, Config.Current.NextPairKeybind, input);
+    }
+
+    private static bool IsControlNewPressed(MyControl control, Binding binding, IMyInput input)
+    {
+        return control != null ? control.IsNewPressed() : binding.HasPressed(input);
+    }
+
+    private static bool BindingsEqual(Binding left, Binding right)
+    {
+        return left.Key == right.Key
+               && left.Ctrl == right.Ctrl
+               && left.Alt == right.Alt
+               && left.Shift == right.Shift;
     }
 
     private static int ComparePairs(DockingPair x, DockingPair y)

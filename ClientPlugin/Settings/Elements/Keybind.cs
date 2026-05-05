@@ -42,7 +42,7 @@ internal class KeybindAttribute : Attribute, IElement
             MyGuiControlTypeEnum.General,
             null,
             binding.Key,
-            keyModifiers: ToKeyboardModifiers(binding));
+            keyModifiers: binding.ToKeyboardModifiers());
 
         StringBuilder output = null;
         control.AppendBoundButtonNames(ref output, MyGuiInputDeviceEnum.Keyboard);
@@ -150,18 +150,6 @@ internal class KeybindAttribute : Attribute, IElement
         MyControl.AppendUnknownTextIfNeeded(ref output, MyTexts.GetString(MyCommonTexts.UnknownControl_None));
         button.Text = output.ToString();
         output.Clear();
-    }
-
-    private static MyKeyboardModifiers ToKeyboardModifiers(Binding binding)
-    {
-        var modifiers = MyKeyboardModifiers.None;
-        if (binding.Ctrl)
-            modifiers |= MyKeyboardModifiers.Control;
-        if (binding.Alt)
-            modifiers |= MyKeyboardModifiers.Alt;
-        if (binding.Shift)
-            modifiers |= MyKeyboardModifiers.Shift;
-        return modifiers;
     }
 
     private static void ApplyKeyboardModifiers(ref Binding binding, MyKeyboardModifiers modifiers)
