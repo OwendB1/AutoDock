@@ -1,6 +1,6 @@
 ﻿<Project Sdk="Microsoft.NET.Sdk">
   <PropertyGroup>
-    <TargetFramework>net481</TargetFramework>
+    <TargetFramework>net10.0</TargetFramework>
     <OutputType>Library</OutputType>
     <RootNamespace>ClientPlugin</RootNamespace>
     <AssemblyName>AutoDock</AssemblyName>
@@ -633,8 +633,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Lib.Harmony" Version="2.4.2" />
-    <PackageReference Include="Mono.Cecil" Version="0.11.6" />
+    <Compile Remove="Tools/Hashing.cs" />
+    <Compile Remove="Tools/PreloaderHelpers.cs" />
+    <Compile Remove="Tools/TranspilerHelpers.cs" />
     <!-- Uncomment to enable publicizer support  
     <PackageReference Include="Krafs.Publicizer" Version="2.3.0">
       <IncludeAssets>runtime; build; native; contentfiles; analyzers; buildtransitive</IncludeAssets>

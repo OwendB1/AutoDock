@@ -1,13 +1,10 @@
 using ClientPlugin.Settings;
 using ClientPlugin.Settings.Elements;
-using Sandbox.Graphics.GUI;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
-using System.Text;
 using ClientPlugin.Settings.Tools;
 using VRage.Input;
-using VRageMath;
 
 
 namespace ClientPlugin;
@@ -17,7 +14,9 @@ public class Config : INotifyPropertyChanged
     #region Options
 
     private float connectorSearchRadius = 5f;
-    private Binding alternativeKeybind = new Binding(MyKeys.None);
+    private Binding activationKeybind = new Binding(MyKeys.P, ctrl: true);
+    private Binding previousPairKeybind = new Binding(MyKeys.Up, ctrl: true);
+    private Binding nextPairKeybind = new Binding(MyKeys.Down, ctrl: true);
 
     #endregion
 
@@ -36,11 +35,25 @@ public class Config : INotifyPropertyChanged
 
     [Separator("Controls")]
 
-    [Keybind(label: "Alternative activation key", description: "Optional extra binding. Ctrl+P is always active. Unbind by right clicking the button.")]
-    public Binding AlternativeKeybind
+    [Keybind(label: "Activate docking", description: "Press once to preview connector pairs. Press again to connect selected pair.")]
+    public Binding ActivationKeybind
     {
-        get => alternativeKeybind;
-        set => SetField(ref alternativeKeybind, value);
+        get => activationKeybind;
+        set => SetField(ref activationKeybind, value);
+    }
+
+    [Keybind(label: "Previous pair", description: "Select previous connector pair while AutoDock preview is active.")]
+    public Binding PreviousPairKeybind
+    {
+        get => previousPairKeybind;
+        set => SetField(ref previousPairKeybind, value);
+    }
+
+    [Keybind(label: "Next pair", description: "Select next connector pair while AutoDock preview is active.")]
+    public Binding NextPairKeybind
+    {
+        get => nextPairKeybind;
+        set => SetField(ref nextPairKeybind, value);
     }
 
     #endregion

@@ -1,10 +1,10 @@
-﻿using System.Reflection;
+﻿using System;
+using System.Runtime.CompilerServices;
 using ClientPlugin.Settings;
 using ClientPlugin.Settings.Layouts;
-using HarmonyLib;
 using Sandbox.Graphics.GUI;
-using VRage.Utils;
 using VRage.Plugins;
+using VRage.Utils;
 
 // Set the assembly version manually if compiled by Pulsar (it won't create what was in AssemblyInfo.cs before)
 #if !DEV_BUILD
@@ -23,7 +23,7 @@ public class Plugin : IPlugin
     private AutoDockController autoDockController;
     private bool updateFailureLogged;
 
-    [System.Runtime.CompilerServices.MethodImpl(System.Runtime.CompilerServices.MethodImplOptions.NoInlining)]
+    [MethodImpl(MethodImplOptions.NoInlining)]
     public void Init(object gameInstance)
     {
         MyLog.Default.WriteLineAndConsole($"{Name}: Init started.");
@@ -38,13 +38,9 @@ public class Plugin : IPlugin
             MyLog.Default.WriteLineAndConsole($"{Name}: Creating AutoDock controller.");
             Instance.autoDockController = new AutoDockController();
 
-            MyLog.Default.WriteLineAndConsole($"{Name}: Applying Harmony patches.");
-            var harmony = new Harmony(Name);
-            harmony.PatchAll(Assembly.GetExecutingAssembly());
-
             MyLog.Default.WriteLineAndConsole($"{Name}: Init completed.");
         }
-        catch (System.Exception exception)
+        catch (Exception exception)
         {
             MyLog.Default.WriteLineAndConsole($"{Name}: Init failed: {exception}");
             throw;
@@ -56,8 +52,6 @@ public class Plugin : IPlugin
         MyLog.Default.WriteLineAndConsole($"{Name}: Dispose.");
         autoDockController?.Dispose();
 
-        // IMPORTANT: Do NOT call harmony.UnpatchAll() here! It may break other plugins.
-
         autoDockController = null;
         Instance = null;
     }
@@ -68,7 +62,7 @@ public class Plugin : IPlugin
         {
             autoDockController?.Update();
         }
-        catch (System.Exception exception)
+        catch (Exception exception)
         {
             if (!updateFailureLogged)
             {

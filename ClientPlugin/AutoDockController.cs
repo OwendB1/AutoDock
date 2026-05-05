@@ -1,11 +1,11 @@
 using System;
 using System.Collections.Generic;
-using ClientPlugin.Settings.Tools;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.Gui;
 using Sandbox.Game.World;
 using Sandbox.Graphics.GUI;
+using Sandbox.ModAPI.Ingame;
 using VRage.Game;
 using VRage.Game.Entity;
 using VRage.Input;
@@ -20,7 +20,6 @@ internal sealed class AutoDockController
     private const float MinSearchRadius = 1f;
     private const float MaxSearchRadius = 10f;
     private const double MinConnectorDistanceSquared = 0.0001;
-    private static readonly Binding PrimaryBinding = new Binding(MyKeys.P, ctrl: true);
 
     private readonly List<DockingPair> pairs = new List<DockingPair>();
     private readonly List<MyShipConnector> localConnectors = new List<MyShipConnector>();
@@ -115,7 +114,7 @@ internal sealed class AutoDockController
             return;
         }
 
-        ((Sandbox.ModAPI.Ingame.IMyShipConnector)pair.Local).Connect();
+        ((IMyShipConnector)pair.Local).Connect();
         Notify("AutoDock: connector lock requested.", "Green");
         ClearSelection();
     }
@@ -307,8 +306,6 @@ internal sealed class AutoDockController
             MySimpleObjectRasterizer.SolidAndWireframe,
             1,
             selected ? 0.035f : 0.018f,
-            null,
-            null,
             onlyFrontFaces: false,
             customViewProjection: -1,
             blendType: MyBillboard.BlendTypeEnum.LDR);
@@ -394,22 +391,17 @@ internal sealed class AutoDockController
 
     private static bool IsActivationPressed(IMyInput input)
     {
-        return PrimaryBinding.HasPressed(input) || Config.Current.AlternativeKeybind.HasPressed(input);
+        return Config.Current.ActivationKeybind.HasPressed(input);
     }
 
     private static bool IsCyclePreviousPressed(IMyInput input)
     {
-        return IsOnlyCtrlPressed(input) && input.IsNewKeyPressed(MyKeys.Up);
+        return Config.Current.PreviousPairKeybind.HasPressed(input);
     }
 
     private static bool IsCycleNextPressed(IMyInput input)
     {
-        return IsOnlyCtrlPressed(input) && input.IsNewKeyPressed(MyKeys.Down);
-    }
-
-    private static bool IsOnlyCtrlPressed(IMyInput input)
-    {
-        return input.IsAnyCtrlKeyPressed() && !input.IsAnyAltKeyPressed() && !input.IsAnyShiftKeyPressed();
+        return Config.Current.NextPairKeybind.HasPressed(input);
     }
 
     private static int ComparePairs(DockingPair x, DockingPair y)

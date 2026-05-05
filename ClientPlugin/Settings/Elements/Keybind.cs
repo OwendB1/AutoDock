@@ -7,9 +7,9 @@ using System.Text;
 using ClientPlugin.Settings.Tools;
 using VRage.Game;
 using VRage.Input;
+using VRage.ModAPI;
 using VRage.Utils;
 using VRage;
-using VRageMath;
 
 namespace ClientPlugin.Settings.Elements;
 
@@ -36,34 +36,13 @@ internal class KeybindAttribute : Attribute, IElement
 
         var label = new MyGuiControlLabel(text: Tools.Tools.GetLabelOrDefault(name, Label));
 
-        var ctrl = new MyGuiControlCheckbox(isChecked: binding.Ctrl, toolTip: "Ctrl");
-        var alt = new MyGuiControlCheckbox(isChecked: binding.Alt, toolTip: "Alt");
-        var shift = new MyGuiControlCheckbox(isChecked: binding.Shift, toolTip: "Shift");
-            
-        ctrl.IsCheckedChanged += (cb) => {
-            var b = this.propertyGetter();
-            b.Ctrl = cb.IsChecked;
-            this.propertySetter(b);
-        };
-
-        alt.IsCheckedChanged += (cb) => {
-            var b = this.propertyGetter();
-            b.Alt = cb.IsChecked;
-            this.propertySetter(b);
-        };
-
-        shift.IsCheckedChanged += (cb) => {
-            var b = this.propertyGetter();
-            b.Shift = cb.IsChecked;
-            this.propertySetter(b);
-        };
-
         var control = new MyControl(
             MyStringId.GetOrCompute($"{name.Replace(" ", "")}Keybind"),
             MyStringId.GetOrCompute(name),
             MyGuiControlTypeEnum.General,
             null,
-            binding.Key);
+            binding.Key,
+            keyModifiers: ToKeyboardModifiers(binding));
 
         StringBuilder output = null;
         control.AppendBoundButtonNames(ref output, MyGuiInputDeviceEnum.Keyboard);
@@ -83,9 +62,6 @@ internal class KeybindAttribute : Attribute, IElement
         {
             new Control(label, minWidth: Control.LabelMinWidth),
             new Control(button),
-            new Control(ctrl, offset: new Vector2(0f, -0.0025f)),
-            new Control(alt, offset: new Vector2(0f, -0.0025f)),
-            new Control(shift, offset: new Vector2(0f, -0.0025f)),
         };
     }
 
@@ -168,10 +144,41 @@ internal class KeybindAttribute : Attribute, IElement
 
         var binding = propertyGetter();
         binding.Key = userData.Control.GetKeyboardControl();
+        ApplyKeyboardModifiers(ref binding, userData.Control.GetKeyboardModifier());
         propertySetter(binding);
 
         MyControl.AppendUnknownTextIfNeeded(ref output, MyTexts.GetString(MyCommonTexts.UnknownControl_None));
         button.Text = output.ToString();
         output.Clear();
+    }
+
+    private static MyKeyboardModifiers ToKeyboardModifiers(Binding binding)
+    {
+        var modifiers = MyKeyboardModifiers.None;
+        if (binding.Ctrl)
+            modifiers |= MyKeyboardModifiers.Control;
+        if (binding.Alt)
+            modifiers |= MyKeyboardModifiers.Alt;
+        if (binding.Shift)
+            modifiers |= MyKeyboardModifiers.Shift;
+        return modifiers;
+    }
+
+    private static void ApplyKeyboardModifiers(ref Binding binding, MyKeyboardModifiers modifiers)
+    {
+        binding.Ctrl = HasAny(modifiers, MyKeyboardModifiers.Control, MyKeyboardModifiers.LeftControl, MyKeyboardModifiers.RightControl);
+        binding.Alt = HasAny(modifiers, MyKeyboardModifiers.Alt, MyKeyboardModifiers.LeftAlt, MyKeyboardModifiers.RightAlt);
+        binding.Shift = HasAny(modifiers, MyKeyboardModifiers.Shift, MyKeyboardModifiers.LeftShift, MyKeyboardModifiers.RightShift);
+    }
+
+    private static bool HasAny(MyKeyboardModifiers value, params MyKeyboardModifiers[] flags)
+    {
+        foreach (MyKeyboardModifiers flag in flags)
+        {
+            if ((value & flag) != MyKeyboardModifiers.None)
+                return true;
+        }
+
+        return false;
     }
 }
