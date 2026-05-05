@@ -20,7 +20,7 @@ internal sealed class AutoDockController
 {
     private const int RescanIntervalFrames = 10;
     private const float MinSearchRadius = 1f;
-    private const float MaxSearchRadius = 10f;
+    private const float MaxSearchRadius = 30f;
     private const double MinConnectorDistanceSquared = 0.0001;
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
@@ -51,7 +51,8 @@ internal sealed class AutoDockController
         IMyInput input = MyInput.Static;
         EnsureGameControls(input);
 
-        if (MyScreenManager.GetScreenWithFocus() != null)
+        MyGuiScreenBase screenWithFocus = MyScreenManager.GetScreenWithFocus();
+        if (screenWithFocus != null && screenWithFocus != MyGuiScreenGamePlay.Static)
         {
             DrawPairs();
             return;
@@ -122,7 +123,8 @@ internal sealed class AutoDockController
             return;
         }
 
-        if (!IsLockReady(pair.Local, pair.Target))
+        pair.RefreshMetrics();
+        if (!pair.LockReady)
         {
             Notify("AutoDock: selected pair is not in connector lock range.", "Red");
             return;
@@ -281,6 +283,7 @@ internal sealed class AutoDockController
         for (int i = 0; i < pairs.Count; i++)
         {
             DockingPair pair = pairs[i];
+            pair.RefreshMetrics();
             bool selected = i == selectedIndex;
             Color color = GetPairColor(pair, selected);
 
@@ -380,6 +383,7 @@ internal sealed class AutoDockController
         if (!TryGetSelectedPair(out DockingPair pair))
             return;
 
+        pair.RefreshMetrics();
         string state = pair.LockReady ? "lock ready" : "aligned";
         Notify($"AutoDock: pair {selectedIndex + 1}/{pairs.Count}, {pair.Distance:0.0} m, {state}.", pair.LockReady ? "Green" : "White");
     }
@@ -538,8 +542,8 @@ internal sealed class AutoDockController
     {
         public readonly MyShipConnector Local;
         public readonly MyShipConnector Target;
-        public readonly double Distance;
-        public readonly bool LockReady;
+        public double Distance { get; private set; }
+        public bool LockReady { get; private set; }
 
         public DockingPair(MyShipConnector local, MyShipConnector target, double distance, bool lockReady)
         {
@@ -547,6 +551,18 @@ internal sealed class AutoDockController
             Target = target;
             Distance = distance;
             LockReady = lockReady;
+        }
+
+        public void RefreshMetrics()
+        {
+            if (Local == null || Target == null || Local.MarkedForClose || Target.MarkedForClose)
+            {
+                LockReady = false;
+                return;
+            }
+
+            Distance = Vector3D.Distance(Local.PositionComp.GetPosition(), Target.PositionComp.GetPosition());
+            LockReady = IsLockReady(Local, Target);
         }
     }
 

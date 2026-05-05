@@ -26,7 +26,7 @@ public class Config : INotifyPropertyChanged
 
     [Separator("Docking")]
 
-    [Slider(1f, 10f, 0.5f, SliderAttribute.SliderType.Float, label: "Connector search radius", description: "Meters from each controlled-grid connector to scan for compatible connector pairs.")]
+    [Slider(1f, 30f, 0.5f, SliderAttribute.SliderType.Float, label: "Connector search radius", description: "Meters from each controlled-grid connector to scan for compatible connector pairs.")]
     public float ConnectorSearchRadius
     {
         get => connectorSearchRadius;
