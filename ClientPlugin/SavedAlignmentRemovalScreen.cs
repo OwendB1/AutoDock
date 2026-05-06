@@ -50,7 +50,7 @@ internal sealed class SavedAlignmentRemovalScreen : MyGuiScreenBase
         m_drawEvenWithoutFocus = true;
         CanHideOthers = true;
         CanBeHidden = true;
-        CloseButtonEnabled = true;
+        CloseButtonEnabled = false;
     }
 
     public override string GetFriendlyName() => "AutoDockSavedAlignmentRemovalScreen";
@@ -89,7 +89,7 @@ internal sealed class SavedAlignmentRemovalScreen : MyGuiScreenBase
         statusLabel = new MyGuiControlLabel(text: "")
         {
             OriginAlign = MyGuiDrawAlignEnum.HORISONTAL_LEFT_AND_VERTICAL_TOP,
-            Position = new Vector2(-0.235f, 0.19f),
+            Position = new Vector2(-0.235f, 0.17f),
         };
         Controls.Add(statusLabel);
 
@@ -149,12 +149,6 @@ internal sealed class SavedAlignmentRemovalScreen : MyGuiScreenBase
             selectedIndex = Math.Max(0, entries.Count - 1);
 
         pendingRemovalIndex = null;
-        if (entries.Count == 0)
-        {
-            CloseScreen();
-            return;
-        }
-
         RefreshControls();
     }
 

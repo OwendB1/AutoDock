@@ -50,6 +50,7 @@ internal sealed class AutoDockController
     private const double AutoDockAngularSofteningThreshold = 0.35;
     private const float AutoDockAngularMinTorque = 0.35f;
     private const float AutoDockAngularMaxTorque = 0.8f;
+    private const int AutoDockLockDelayFrames = 15;
     private const double ManualInputDeadzone = 0.12;
     private const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
@@ -79,6 +80,7 @@ internal sealed class AutoDockController
     private int autoDockFrames;
     private bool autoDockConnectRequested;
     private bool autoDockWaitingForLockNotified;
+    private int autoDockLockReadyFrames;
     private Vector3D autoDockPositionErrorIntegral;
     private Vector3D autoDockOrientationErrorIntegral;
     private SavedAlignmentRemovalScreen removeAlignmentScreen;
@@ -204,9 +206,7 @@ internal sealed class AutoDockController
 
         if (pair.LockReady)
         {
-            ((IMyShipConnector)pair.Local).Connect();
-            Notify("AutoDock: connector lock requested.", "Green");
-            ClearSelection();
+            StartAutoDock(pair, "AutoDock: delaying connector lock to close final gap.");
         }
         else
         {
@@ -220,15 +220,16 @@ internal sealed class AutoDockController
         }
     }
 
-    private void StartAutoDock(DockingPair pair)
+    private void StartAutoDock(DockingPair pair, string message = "AutoDock: moving selected grid into docking position.")
     {
         autoDockingPair = pair;
         autoDockFrames = 0;
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
+        autoDockLockReadyFrames = 0;
         ResetAutoDockPidState();
         active = true;
-        Notify("AutoDock: moving selected grid into docking position.", "White");
+        Notify(message, "White");
     }
 
     private void UpdateAutoDock()
@@ -264,11 +265,8 @@ internal sealed class AutoDockController
             return;
         }
 
-        if (pair.LockReady)
-        {
-            RequestDockLock(pair);
+        if (pair.LockReady && autoDockConnectRequested)
             return;
-        }
 
         if (!TryCreateDockingTarget(pair, out DockingTarget target))
         {
@@ -284,14 +282,20 @@ internal sealed class AutoDockController
 
         ApplyAutoDockControl(pair, controller, target);
 
+        pair.RefreshMetrics();
+        if (pair.LockReady)
+        {
+            if (RequestDockLock(pair))
+                return;
+        }
+        else
+        {
+            autoDockLockReadyFrames = 0;
+        }
+
         if (target.DockingReady)
         {
-            pair.RefreshMetrics();
-            if (pair.LockReady)
-            {
-                RequestDockLock(pair);
-            }
-            else if (!autoDockWaitingForLockNotified)
+            if (!pair.LockReady && !autoDockWaitingForLockNotified)
             {
                 autoDockWaitingForLockNotified = true;
                 Notify("AutoDock: aligned. Waiting for connector lock range.", "White");
@@ -299,23 +303,28 @@ internal sealed class AutoDockController
         }
     }
 
-    private void RequestDockLock(DockingPair pair)
+    private bool RequestDockLock(DockingPair pair)
     {
-        if (!autoDockConnectRequested)
-        {
-            autoDockConnectRequested = true;
-            ReleaseShipControl(pair.Local.CubeGrid);
-            ((IMyShipConnector)pair.Local).Connect();
-            pair.RefreshMetrics();
-            if (IsDocked(pair))
-            {
-                Notify("AutoDock: connector lock succeeded.", "Green");
-                ClearSelection();
-                return;
-            }
+        if (autoDockConnectRequested)
+            return true;
 
-            Notify("AutoDock: connector lock requested.", "Green");
+        autoDockLockReadyFrames++;
+        if (autoDockLockReadyFrames < AutoDockLockDelayFrames)
+            return false;
+
+        autoDockConnectRequested = true;
+        ReleaseShipControl(pair.Local.CubeGrid);
+        ((IMyShipConnector)pair.Local).Connect();
+        pair.RefreshMetrics();
+        if (IsDocked(pair))
+        {
+            Notify("AutoDock: connector lock succeeded.", "Green");
+            ClearSelection();
+            return true;
         }
+
+        Notify("AutoDock: connector lock requested.", "Green");
+        return true;
     }
 
     private void CancelAutoDock(string message, string font)
@@ -326,6 +335,7 @@ internal sealed class AutoDockController
         autoDockFrames = 0;
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
+        autoDockLockReadyFrames = 0;
         Notify(message, font);
     }
 
@@ -1144,6 +1154,7 @@ internal sealed class AutoDockController
         autoDockFrames = 0;
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
+        autoDockLockReadyFrames = 0;
     }
 
     private static float GetSearchRadius()
@@ -1415,7 +1426,7 @@ internal sealed class AutoDockController
         return false;
     }
 
-    private static bool HasSavedAlignment(long localConnectorId, long targetConnectorId)
+    private static bool CheckSavedAlignment(long localConnectorId, long targetConnectorId)
     {
         return TryGetSavedAlignment(localConnectorId, targetConnectorId, out _, out _);
     }
@@ -1502,7 +1513,7 @@ internal sealed class AutoDockController
         {
             Local = local;
             Target = target;
-            HasSavedAlignment = HasSavedAlignment(local.EntityId, target.EntityId);
+            HasSavedAlignment = CheckSavedAlignment(local.EntityId, target.EntityId);
             Distance = distance;
             InRange = IsWithinSearchRange(distance);
             LockReady = lockReady;
