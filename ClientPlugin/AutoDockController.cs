@@ -50,31 +50,40 @@ internal sealed class AutoDockController
     private const double AutoDockAngularSofteningThreshold = 0.35;
     private const float AutoDockAngularMinTorque = 0.35f;
     private const float AutoDockAngularMaxTorque = 0.8f;
-    private const int AutoDockLockDelayFrames = 15;
+    private const int AutoDockLockDelayFrames = 12;
     private const double ManualInputDeadzone = 0.12;
     private const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
     private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
+    private static readonly MyStringId PreviousConnectorControlId = MyStringId.GetOrCompute("AutoDock.PreviousConnectorKeybind");
+    private static readonly MyStringId NextConnectorControlId = MyStringId.GetOrCompute("AutoDock.NextConnectorKeybind");
     private static readonly MyStringId SaveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.SaveAlignmentKeybind");
     private static readonly MyStringId RemoveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.RemoveAlignmentKeybind");
 
     private readonly List<DockingPair> pairs = new List<DockingPair>();
     private readonly List<MyShipConnector> localConnectors = new List<MyShipConnector>();
+    private readonly Dictionary<long, List<DockingPair>> pairsByLocalConnectorId = new Dictionary<long, List<DockingPair>>();
     private readonly HashSet<PairKey> pairKeys = new HashSet<PairKey>();
 
     private Binding registeredActivationKeybind = new Binding(MyKeys.None);
     private Binding registeredPreviousPairKeybind = new Binding(MyKeys.None);
     private Binding registeredNextPairKeybind = new Binding(MyKeys.None);
+    private Binding registeredPreviousConnectorKeybind = new Binding(MyKeys.None);
+    private Binding registeredNextConnectorKeybind = new Binding(MyKeys.None);
     private Binding registeredSaveAlignmentKeybind = new Binding(MyKeys.None);
     private Binding registeredRemoveAlignmentKeybind = new Binding(MyKeys.None);
     private MyControl activationControl;
     private MyControl previousPairControl;
     private MyControl nextPairControl;
+    private MyControl previousConnectorControl;
+    private MyControl nextConnectorControl;
     private MyControl saveAlignmentControl;
     private MyControl removeAlignmentControl;
     private bool active;
     private int selectedIndex = -1;
+    private int selectedConnectorIndex = -1;
+    private long preferredLocalConnectorEntityId;
     private int framesUntilRescan;
     private DockingPair autoDockingPair;
     private int autoDockFrames;
@@ -153,10 +162,14 @@ internal sealed class AutoDockController
             }
         }
 
-        if (IsCyclePreviousPressed(input))
-            SelectRelative(-1);
+        if (IsCyclePreviousConnectorPressed(input))
+            CycleConnector(-1);
+        else if (IsCycleNextConnectorPressed(input))
+            CycleConnector(1);
+        else if (IsCyclePreviousPressed(input))
+            CyclePair(-1);
         else if (IsCycleNextPressed(input))
-            SelectRelative(1);
+            CyclePair(1);
 
         DrawPairs();
     }
@@ -223,6 +236,7 @@ internal sealed class AutoDockController
     private void StartAutoDock(DockingPair pair, string message = "AutoDock: moving selected grid into docking position.")
     {
         autoDockingPair = pair;
+        preferredLocalConnectorEntityId = pair?.Local?.EntityId ?? preferredLocalConnectorEntityId;
         autoDockFrames = 0;
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
@@ -265,25 +279,8 @@ internal sealed class AutoDockController
             return;
         }
 
-        if (pair.LockReady && autoDockConnectRequested)
-            return;
-
-        if (!TryCreateDockingTarget(pair, out DockingTarget target))
-        {
-            CancelAutoDock("AutoDock: cannot calculate docking position.", "Red");
-            return;
-        }
-
-        if (!TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
-        {
-            CancelAutoDock("AutoDock: no active ship controller on selected grid.", "Red");
-            return;
-        }
-
-        ApplyAutoDockControl(pair, controller, target);
-
-        pair.RefreshMetrics();
-        if (pair.LockReady)
+        bool lockReadyAtStart = pair.LockReady;
+        if (lockReadyAtStart)
         {
             if (RequestDockLock(pair))
                 return;
@@ -291,6 +288,40 @@ internal sealed class AutoDockController
         else
         {
             autoDockLockReadyFrames = 0;
+        }
+
+        if (!TryCreateDockingTarget(pair, out DockingTarget target))
+        {
+            if (lockReadyAtStart)
+                return;
+
+            CancelAutoDock("AutoDock: cannot calculate docking position.", "Red");
+            return;
+        }
+
+        if (!TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
+        {
+            if (lockReadyAtStart)
+                return;
+
+            CancelAutoDock("AutoDock: no active ship controller on selected grid.", "Red");
+            return;
+        }
+
+        ApplyAutoDockControl(pair, controller, target);
+
+        if (!lockReadyAtStart)
+        {
+            pair.RefreshMetrics();
+            if (pair.LockReady)
+            {
+                if (RequestDockLock(pair))
+                    return;
+            }
+            else
+            {
+                autoDockLockReadyFrames = 0;
+            }
         }
 
         if (target.DockingReady)
@@ -343,7 +374,7 @@ internal sealed class AutoDockController
     {
         long previousLocalId = 0;
         long previousTargetId = 0;
-        int previousIndex = selectedIndex < 0 ? 0 : selectedIndex;
+        int previousPairIndex = selectedIndex < 0 ? 0 : selectedIndex;
 
         if (preserveSelection && TryGetSelectedPair(out DockingPair selectedPair))
         {
@@ -354,38 +385,60 @@ internal sealed class AutoDockController
         pairs.Clear();
         pairKeys.Clear();
         localConnectors.Clear();
+        pairsByLocalConnectorId.Clear();
 
         MyCubeGrid controlledGrid = MySession.Static.ControlledGrid;
         if (controlledGrid == null || controlledGrid.MarkedForClose)
         {
+            selectedConnectorIndex = -1;
             selectedIndex = -1;
             return;
         }
 
+        var availableLocalConnectors = new List<MyShipConnector>();
         foreach (MyShipConnector connector in controlledGrid.GetFatBlocks<MyShipConnector>())
         {
             if (IsConnectorAvailable(connector, localSide: true))
-                localConnectors.Add(connector);
+                availableLocalConnectors.Add(connector);
         }
 
+        availableLocalConnectors.Sort(CompareLocalConnectors);
+
         float radius = SoftSelectRadius;
-        foreach (MyShipConnector localConnector in localConnectors)
-            AddPairsNear(localConnector, radius);
-
-        pairs.Sort(ComparePairs);
-
-        if (pairs.Count == 0)
+        foreach (MyShipConnector localConnector in availableLocalConnectors)
         {
+            var connectorPairs = new List<DockingPair>();
+            AddPairsNear(localConnector, radius, connectorPairs);
+            if (connectorPairs.Count == 0)
+                continue;
+
+            connectorPairs.Sort(ComparePairs);
+            localConnectors.Add(localConnector);
+            pairsByLocalConnectorId[localConnector.EntityId] = connectorPairs;
+        }
+
+        if (localConnectors.Count == 0)
+        {
+            selectedConnectorIndex = -1;
             selectedIndex = -1;
             return;
         }
 
-        selectedIndex = FindPair(previousLocalId, previousTargetId);
-        if (selectedIndex < 0)
-            selectedIndex = Math.Min(previousIndex, pairs.Count - 1);
+        long desiredLocalId = previousLocalId;
+        if (desiredLocalId == 0)
+            desiredLocalId = preferredLocalConnectorEntityId;
+
+        selectedConnectorIndex = FindLocalConnectorIndex(desiredLocalId);
+        if (selectedConnectorIndex < 0)
+            selectedConnectorIndex = 0;
+
+        SelectConnectorByIndex(
+            selectedConnectorIndex,
+            preserveSelection ? previousPairIndex : 0,
+            preserveSelection ? previousTargetId : 0);
     }
 
-    private void AddPairsNear(MyShipConnector localConnector, float radius)
+    private void AddPairsNear(MyShipConnector localConnector, float radius, List<DockingPair> connectorPairs)
     {
         Vector3D position = localConnector.PositionComp.GetPosition();
         BoundingSphereD sphere = new BoundingSphereD(position, radius);
@@ -397,12 +450,12 @@ internal sealed class AutoDockController
             {
                 if (entity is MyShipConnector targetConnector)
                 {
-                    AddPairIfCompatible(localConnector, targetConnector, radius);
+                    AddPairIfCompatible(localConnector, targetConnector, radius, connectorPairs);
                     continue;
                 }
 
                 if (entity is MyCubeGrid targetGrid)
-                    AddGridPairs(localConnector, targetGrid, radius);
+                    AddGridPairs(localConnector, targetGrid, radius, connectorPairs);
             }
         }
         finally
@@ -411,16 +464,16 @@ internal sealed class AutoDockController
         }
     }
 
-    private void AddGridPairs(MyShipConnector localConnector, MyCubeGrid targetGrid, float radius)
+    private void AddGridPairs(MyShipConnector localConnector, MyCubeGrid targetGrid, float radius, List<DockingPair> connectorPairs)
     {
         if (targetGrid == null || targetGrid.MarkedForClose || targetGrid == localConnector.CubeGrid)
             return;
 
         foreach (MyShipConnector targetConnector in targetGrid.GetFatBlocks<MyShipConnector>())
-            AddPairIfCompatible(localConnector, targetConnector, radius);
+            AddPairIfCompatible(localConnector, targetConnector, radius, connectorPairs);
     }
 
-    private void AddPairIfCompatible(MyShipConnector localConnector, MyShipConnector targetConnector, float radius)
+    private void AddPairIfCompatible(MyShipConnector localConnector, MyShipConnector targetConnector, float radius, List<DockingPair> connectorPairs)
     {
         if (!IsConnectorAvailable(targetConnector, localSide: false))
             return;
@@ -442,7 +495,63 @@ internal sealed class AutoDockController
         if (!lockReady && !AreFacing(localConnector, targetConnector, localPosition, targetPosition))
             return;
 
-        pairs.Add(new DockingPair(localConnector, targetConnector, distance, lockReady));
+        connectorPairs.Add(new DockingPair(localConnector, targetConnector, distance, lockReady));
+    }
+
+    private void SelectConnectorByIndex(int connectorIndex, int fallbackPairIndex, long preferredTargetId = 0)
+    {
+        pairs.Clear();
+
+        if (connectorIndex < 0 || connectorIndex >= localConnectors.Count)
+        {
+            selectedConnectorIndex = -1;
+            selectedIndex = -1;
+            return;
+        }
+
+        selectedConnectorIndex = connectorIndex;
+        MyShipConnector localConnector = localConnectors[connectorIndex];
+        preferredLocalConnectorEntityId = localConnector.EntityId;
+
+        if (!pairsByLocalConnectorId.TryGetValue(localConnector.EntityId, out List<DockingPair> connectorPairs)
+            || connectorPairs.Count == 0)
+        {
+            selectedIndex = -1;
+            return;
+        }
+
+        pairs.AddRange(connectorPairs);
+        selectedIndex = preferredTargetId == 0 ? -1 : FindPair(localConnector.EntityId, preferredTargetId);
+        if (selectedIndex < 0)
+        {
+            if (fallbackPairIndex < 0)
+                fallbackPairIndex = 0;
+            if (fallbackPairIndex >= pairs.Count)
+                fallbackPairIndex = pairs.Count - 1;
+
+            selectedIndex = fallbackPairIndex;
+        }
+    }
+
+    private int FindLocalConnectorIndex(long localEntityId)
+    {
+        if (localEntityId == 0)
+            return -1;
+
+        for (int i = 0; i < localConnectors.Count; i++)
+        {
+            if (localConnectors[i].EntityId == localEntityId)
+                return i;
+        }
+
+        return -1;
+    }
+
+    private static int CompareLocalConnectors(MyShipConnector x, MyShipConnector y)
+    {
+        long leftId = x?.EntityId ?? 0L;
+        long rightId = y?.EntityId ?? 0L;
+        return leftId.CompareTo(rightId);
     }
 
     private static bool IsConnectorAvailable(MyShipConnector connector, bool localSide)
@@ -899,9 +1008,9 @@ internal sealed class AutoDockController
 
     private void HandleSaveAlignmentPressed()
     {
-        if (!TryGetPairForAlignmentSave(out DockingPair pair))
+        if (!TryGetLockedPairForAlignmentSave(out DockingPair pair))
         {
-            Notify("AutoDock: no selected or connected connector pair to save.", "Red");
+            Notify("AutoDock: connectors must be locked before saving alignment.", "Red");
             return;
         }
 
@@ -928,7 +1037,7 @@ internal sealed class AutoDockController
 
     private void HandleRemoveAlignmentPressed()
     {
-        if (TryGetConnectedPair(out DockingPair pair)
+        if (TryGetLockedPair(out DockingPair pair)
             && TryGetSavedAlignment(pair.Local.EntityId, pair.Target.EntityId, out SavedConnectorAlignment savedAlignment, out _))
         {
             RemoveSavedAlignment(savedAlignment, $"AutoDock: removed saved alignment for {savedAlignment.GetDisplayName(GetGridDisplayName(pair.Local.CubeGrid))}.");
@@ -1022,6 +1131,15 @@ internal sealed class AutoDockController
 
     private void DrawPairs()
     {
+        if (autoDockingPair != null)
+        {
+            autoDockingPair.RefreshMetrics();
+            DrawConnectorBox(autoDockingPair.Local, GetBoxColor(autoDockingPair, selected: true), selected: true);
+            DrawConnectorBox(autoDockingPair.Target, GetBoxColor(autoDockingPair, selected: true), selected: true);
+            DrawConnectionLine(autoDockingPair, GetLineColor(autoDockingPair, selected: true), selected: true);
+            return;
+        }
+
         if (!active || pairs.Count == 0)
             return;
 
@@ -1090,20 +1208,60 @@ internal sealed class AutoDockController
         MySimpleObjectDraw.DrawLine(start, end, null, ref lineColor, selected ? 0.05f : 0.025f, MyBillboard.BlendTypeEnum.LDR);
     }
 
-    private void SelectRelative(int offset)
+    private void CyclePair(int offset)
     {
-        if (pairs.Count < 2)
+        if (pairs.Count == 0 || offset == 0)
             return;
 
-        selectedIndex = (selectedIndex + offset) % pairs.Count;
         if (selectedIndex < 0)
-            selectedIndex += pairs.Count;
+            selectedIndex = 0;
 
+        int nextPairIndex = selectedIndex + offset;
+        if (nextPairIndex >= 0 && nextPairIndex < pairs.Count)
+        {
+            selectedIndex = nextPairIndex;
+            NotifySelection();
+            return;
+        }
+
+        if (localConnectors.Count < 2)
+            return;
+
+        int nextConnectorIndex = selectedConnectorIndex + (offset > 0 ? 1 : -1);
+        if (nextConnectorIndex < 0)
+            nextConnectorIndex = localConnectors.Count - 1;
+        else if (nextConnectorIndex >= localConnectors.Count)
+            nextConnectorIndex = 0;
+
+        int connectorPairIndex = offset > 0 ? 0 : int.MaxValue;
+        SelectConnectorByIndex(nextConnectorIndex, connectorPairIndex);
+        NotifySelection();
+    }
+
+    private void CycleConnector(int offset)
+    {
+        if (localConnectors.Count < 2 || offset == 0)
+            return;
+
+        int nextConnectorIndex = selectedConnectorIndex + offset;
+        if (nextConnectorIndex < 0)
+            nextConnectorIndex = localConnectors.Count - 1;
+        else if (nextConnectorIndex >= localConnectors.Count)
+            nextConnectorIndex = 0;
+
+        int connectorPairIndex = offset > 0 ? 0 : int.MaxValue;
+        SelectConnectorByIndex(nextConnectorIndex, connectorPairIndex);
         NotifySelection();
     }
 
     private bool TryGetSelectedPair(out DockingPair pair)
     {
+        if (autoDockingPair != null)
+        {
+            pair = autoDockingPair;
+            return true;
+        }
+
         if (selectedIndex >= 0 && selectedIndex < pairs.Count)
         {
             pair = pairs[selectedIndex];
@@ -1137,7 +1295,11 @@ internal sealed class AutoDockController
         pair.RefreshMetrics();
         string state = pair.LockReady ? "lock ready" : pair.InRange ? "in range" : $"outside {GetSearchRadius():0.#} m range";
         string savedAlignmentState = pair.HasSavedAlignment ? ", saved alignment" : "";
-        Notify($"AutoDock: pair {selectedIndex + 1}/{pairs.Count}, {pair.Distance:0.0} m, {state}{savedAlignmentState}.", pair.InRange ? "White" : "Red");
+        int connectorNumber = selectedConnectorIndex >= 0 ? selectedConnectorIndex + 1 : 1;
+        int pairNumber = selectedIndex >= 0 ? selectedIndex + 1 : 1;
+        Notify(
+            $"AutoDock: connector {connectorNumber}/{Math.Max(1, localConnectors.Count)}, pair {pairNumber}/{Math.Max(1, pairs.Count)}, {pair.Distance:0.0} m, {state}{savedAlignmentState}.",
+            pair.InRange ? "White" : "Red");
     }
 
     private void ClearSelection()
@@ -1145,10 +1307,12 @@ internal sealed class AutoDockController
         ReleaseShipControl(autoDockingPair?.Local?.CubeGrid);
         ResetAutoDockPidState();
         active = false;
+        selectedConnectorIndex = -1;
         selectedIndex = -1;
         pairs.Clear();
         pairKeys.Clear();
         localConnectors.Clear();
+        pairsByLocalConnectorId.Clear();
         framesUntilRescan = 0;
         autoDockingPair = null;
         autoDockFrames = 0;
@@ -1197,6 +1361,20 @@ internal sealed class AutoDockController
             ref nextPairControl);
         changed |= EnsureGameControl(
             input,
+            PreviousConnectorControlId,
+            "AutoDock Previous Connector",
+            Config.Current.PreviousConnectorKeybind,
+            ref registeredPreviousConnectorKeybind,
+            ref previousConnectorControl);
+        changed |= EnsureGameControl(
+            input,
+            NextConnectorControlId,
+            "AutoDock Next Connector",
+            Config.Current.NextConnectorKeybind,
+            ref registeredNextConnectorKeybind,
+            ref nextConnectorControl);
+        changed |= EnsureGameControl(
+            input,
             SaveAlignmentControlId,
             "AutoDock Save Alignment",
             Config.Current.SaveAlignmentKeybind,
@@ -1243,6 +1421,20 @@ internal sealed class AutoDockController
             unbound,
             ref registeredNextPairKeybind,
             ref nextPairControl);
+        changed |= EnsureGameControl(
+            input,
+            PreviousConnectorControlId,
+            "AutoDock Previous Connector",
+            unbound,
+            ref registeredPreviousConnectorKeybind,
+            ref previousConnectorControl);
+        changed |= EnsureGameControl(
+            input,
+            NextConnectorControlId,
+            "AutoDock Next Connector",
+            unbound,
+            ref registeredNextConnectorKeybind,
+            ref nextConnectorControl);
         changed |= EnsureGameControl(
             input,
             SaveAlignmentControlId,
@@ -1301,6 +1493,16 @@ internal sealed class AutoDockController
         return IsControlNewPressed(nextPairControl, Config.Current.NextPairKeybind, input);
     }
 
+    private bool IsCyclePreviousConnectorPressed(IMyInput input)
+    {
+        return IsControlNewPressed(previousConnectorControl, Config.Current.PreviousConnectorKeybind, input);
+    }
+
+    private bool IsCycleNextConnectorPressed(IMyInput input)
+    {
+        return IsControlNewPressed(nextConnectorControl, Config.Current.NextConnectorKeybind, input);
+    }
+
     private bool IsSaveAlignmentPressed(IMyInput input)
     {
         return IsControlNewPressed(saveAlignmentControl, Config.Current.SaveAlignmentKeybind, input);
@@ -1337,21 +1539,26 @@ internal sealed class AutoDockController
         return x.Distance.CompareTo(y.Distance);
     }
 
-    private bool TryGetPairForAlignmentSave(out DockingPair pair)
+    private bool TryGetLockedPairForAlignmentSave(out DockingPair pair)
     {
-        if (TryGetSelectedPair(out pair))
-            return true;
-
-        if (autoDockingPair != null)
-        {
-            pair = autoDockingPair;
-            return true;
-        }
-
-        return TryGetConnectedPair(out pair);
+        return TryGetLockedPair(out pair);
     }
 
-    private static bool TryGetConnectedPair(out DockingPair pair)
+    private static bool IsLockedPair(MyShipConnector localConnector, MyShipConnector targetConnector)
+    {
+        IMyShipConnector localConnectorApi = localConnector;
+        IMyShipConnector targetConnectorApi = targetConnector;
+        return localConnector != null
+               && targetConnector != null
+               && localConnectorApi.Status == MyShipConnectorStatus.Connected
+               && targetConnectorApi.Status == MyShipConnectorStatus.Connected
+               && localConnector.Connected
+               && targetConnector.Connected
+               && localConnector.Other == targetConnector
+               && targetConnector.Other == localConnector;
+    }
+
+    private static bool TryGetLockedPair(out DockingPair pair)
     {
         pair = null;
 
@@ -1375,6 +1582,9 @@ internal sealed class AutoDockController
                 || targetConnector.CubeGrid == null
                 || targetConnector.CubeGrid.MarkedForClose
                 || targetConnector.CubeGrid == localConnector.CubeGrid)
+                continue;
+
+            if (!IsLockedPair(localConnector, targetConnector))
                 continue;
 
             double distance = Vector3D.Distance(localConnector.PositionComp.GetPosition(), targetConnector.PositionComp.GetPosition());
