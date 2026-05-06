@@ -1,7 +1,7 @@
-﻿using Sandbox.Graphics.GUI;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using ClientPlugin.Settings.Tools;
+using Sandbox.Graphics.GUI;
 using VRage.Game;
 using VRageMath;
 

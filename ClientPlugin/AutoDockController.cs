@@ -2,9 +2,7 @@ using System;
 using Sandbox.Game.Gui;
 using Sandbox.Game.World;
 using Sandbox.Graphics.GUI;
-using VRage.Game;
 using VRage.Input;
-using VRage.Utils;
 using VRageMath;
 
 namespace ClientPlugin;

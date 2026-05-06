@@ -1,15 +1,15 @@
-﻿using Sandbox.Game.Gui;
-using Sandbox.Graphics.GUI;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Reflection;
 using System.Text;
 using ClientPlugin.Settings.Tools;
+using Sandbox.Game.Gui;
+using Sandbox.Graphics.GUI;
+using VRage;
 using VRage.Game;
 using VRage.Input;
 using VRage.ModAPI;
 using VRage.Utils;
-using VRage;
 
 namespace ClientPlugin.Settings.Elements;
 

@@ -1,7 +1,7 @@
-﻿using Sandbox.Graphics.GUI;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text;
+using Sandbox.Graphics.GUI;
 using VRage.Utils;
 
 namespace ClientPlugin.Settings.Elements;

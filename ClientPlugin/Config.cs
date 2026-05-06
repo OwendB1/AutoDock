@@ -1,8 +1,8 @@
-using ClientPlugin.Settings;
-using ClientPlugin.Settings.Elements;
 using System.Collections.Generic;
 using System.ComponentModel;
 using System.Runtime.CompilerServices;
+using ClientPlugin.Settings;
+using ClientPlugin.Settings.Elements;
 using ClientPlugin.Settings.Tools;
 using VRage.Input;
 

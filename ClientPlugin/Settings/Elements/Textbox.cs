@@ -1,6 +1,6 @@
-﻿using Sandbox.Graphics.GUI;
-using System;
+﻿using System;
 using System.Collections.Generic;
+using Sandbox.Graphics.GUI;
 
 namespace ClientPlugin.Settings.Elements;
 

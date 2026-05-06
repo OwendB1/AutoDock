@@ -1,7 +1,7 @@
-﻿using Sandbox.Graphics.GUI;
-using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Text.RegularExpressions;
+using Sandbox.Graphics.GUI;
 
 namespace ClientPlugin.Settings.Elements;
 
