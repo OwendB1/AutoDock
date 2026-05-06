@@ -17,6 +17,8 @@ public class Config : INotifyPropertyChanged
     private Binding activationKeybind = new Binding(MyKeys.P, ctrl: true);
     private Binding previousPairKeybind = new Binding(MyKeys.Up, ctrl: true);
     private Binding nextPairKeybind = new Binding(MyKeys.Down, ctrl: true);
+    private Binding saveAlignmentKeybind = new Binding(MyKeys.L, ctrl: true);
+    private List<SavedConnectorAlignment> savedAlignments = new List<SavedConnectorAlignment>();
 
     #endregion
 
@@ -54,6 +56,19 @@ public class Config : INotifyPropertyChanged
     {
         get => nextPairKeybind;
         set => SetField(ref nextPairKeybind, value);
+    }
+
+    [Keybind(label: "Save pair alignment", description: "Save current relative alignment for selected or connected connector pair. AutoDock will prefer it for this pair.")]
+    public Binding SaveAlignmentKeybind
+    {
+        get => saveAlignmentKeybind;
+        set => SetField(ref saveAlignmentKeybind, value);
+    }
+
+    public List<SavedConnectorAlignment> SavedAlignments
+    {
+        get => savedAlignments ?? (savedAlignments = new List<SavedConnectorAlignment>());
+        set => savedAlignments = value ?? new List<SavedConnectorAlignment>();
     }
 
     #endregion

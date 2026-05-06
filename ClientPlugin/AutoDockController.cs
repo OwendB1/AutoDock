@@ -1,5 +1,6 @@
 using System;
 using System.Collections.Generic;
+using ClientPlugin.Settings;
 using ClientPlugin.Settings.Tools;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
@@ -54,6 +55,7 @@ internal sealed class AutoDockController
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
     private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
+    private static readonly MyStringId SaveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.SaveAlignmentKeybind");
 
     private readonly List<DockingPair> pairs = new List<DockingPair>();
     private readonly List<MyShipConnector> localConnectors = new List<MyShipConnector>();
@@ -62,9 +64,11 @@ internal sealed class AutoDockController
     private Binding registeredActivationKeybind = new Binding(MyKeys.None);
     private Binding registeredPreviousPairKeybind = new Binding(MyKeys.None);
     private Binding registeredNextPairKeybind = new Binding(MyKeys.None);
+    private Binding registeredSaveAlignmentKeybind = new Binding(MyKeys.None);
     private MyControl activationControl;
     private MyControl previousPairControl;
     private MyControl nextPairControl;
+    private MyControl saveAlignmentControl;
     private bool active;
     private int selectedIndex = -1;
     private int framesUntilRescan;
@@ -89,6 +93,13 @@ internal sealed class AutoDockController
         MyGuiScreenBase screenWithFocus = MyScreenManager.GetScreenWithFocus();
         if (screenWithFocus != null && screenWithFocus != MyGuiScreenGamePlay.Static)
         {
+            DrawPairs();
+            return;
+        }
+
+        if (IsSaveAlignmentPressed(input))
+        {
+            HandleSaveAlignmentPressed();
             DrawPairs();
             return;
         }
@@ -537,6 +548,40 @@ internal sealed class AutoDockController
 
     private static bool TryGetGridRotationTarget(DockingPair pair, out MatrixD targetOrientation)
     {
+        if (TryGetSavedGridRotationTarget(pair, out targetOrientation))
+            return true;
+
+        return TryGetDefaultGridRotationTarget(pair, out targetOrientation);
+    }
+
+    private static bool TryGetSavedGridRotationTarget(DockingPair pair, out MatrixD targetOrientation)
+    {
+        targetOrientation = MatrixD.Identity;
+        if (!TryGetSavedConnectorAlignmentMatrix(pair, out MatrixD relativeConnectorMatrix))
+            return false;
+
+        MatrixD targetConnectorWorldMatrix = pair.Target.WorldMatrix;
+        targetConnectorWorldMatrix.Translation = Vector3D.Zero;
+
+        MatrixD desiredLocalConnectorWorldMatrix = relativeConnectorMatrix * targetConnectorWorldMatrix;
+        desiredLocalConnectorWorldMatrix.Translation = Vector3D.Zero;
+
+        MatrixD currentGridMatrix = pair.Local.CubeGrid.PositionComp.WorldMatrixRef;
+        currentGridMatrix.Translation = Vector3D.Zero;
+        MatrixD inverseGridMatrix = MatrixD.Invert(currentGridMatrix);
+
+        MatrixD localConnectorWorldMatrix = pair.Local.WorldMatrix;
+        localConnectorWorldMatrix.Translation = Vector3D.Zero;
+        MatrixD localConnectorGridMatrix = localConnectorWorldMatrix * inverseGridMatrix;
+        localConnectorGridMatrix.Translation = Vector3D.Zero;
+
+        targetOrientation = MatrixD.Invert(localConnectorGridMatrix) * desiredLocalConnectorWorldMatrix;
+        targetOrientation.Translation = Vector3D.Zero;
+        return targetOrientation.IsValid();
+    }
+
+    private static bool TryGetDefaultGridRotationTarget(DockingPair pair, out MatrixD targetOrientation)
+    {
         targetOrientation = MatrixD.Identity;
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
@@ -826,6 +871,33 @@ internal sealed class AutoDockController
         return vector * (maxLength / Math.Sqrt(lengthSquared));
     }
 
+    private void HandleSaveAlignmentPressed()
+    {
+        if (!TryGetPairForAlignmentSave(out DockingPair pair))
+        {
+            Notify("AutoDock: no selected or connected connector pair to save.", "Red");
+            return;
+        }
+
+        if (!TryBuildRelativeConnectorAlignment(pair.Local, pair.Target, out MatrixD relativeConnectorMatrix))
+        {
+            Notify("AutoDock: cannot save connector alignment right now.", "Red");
+            return;
+        }
+
+        SavedConnectorAlignment savedAlignment = GetOrCreateSavedAlignment(pair.Local.EntityId, pair.Target.EntityId);
+        savedAlignment.SetRelativeConnectorMatrix(relativeConnectorMatrix);
+        ConfigStorage.Save(Config.Current);
+
+        if (active)
+        {
+            RescanPairs(preserveSelection: true);
+            framesUntilRescan = RescanIntervalFrames;
+        }
+
+        Notify("AutoDock: saved connector alignment for current pair.", "Green");
+    }
+
     private void ResetAutoDockPidState()
     {
         autoDockPositionErrorIntegral = Vector3D.Zero;
@@ -976,7 +1048,8 @@ internal sealed class AutoDockController
 
         pair.RefreshMetrics();
         string state = pair.LockReady ? "lock ready" : pair.InRange ? "in range" : $"outside {GetSearchRadius():0.#} m range";
-        Notify($"AutoDock: pair {selectedIndex + 1}/{pairs.Count}, {pair.Distance:0.0} m, {state}.", pair.InRange ? "White" : "Red");
+        string savedAlignmentState = pair.HasSavedAlignment ? ", saved alignment" : "";
+        Notify($"AutoDock: pair {selectedIndex + 1}/{pairs.Count}, {pair.Distance:0.0} m, {state}{savedAlignmentState}.", pair.InRange ? "White" : "Red");
     }
 
     private void ClearSelection()
@@ -1033,6 +1106,13 @@ internal sealed class AutoDockController
             Config.Current.NextPairKeybind,
             ref registeredNextPairKeybind,
             ref nextPairControl);
+        changed |= EnsureGameControl(
+            input,
+            SaveAlignmentControlId,
+            "AutoDock Save Alignment",
+            Config.Current.SaveAlignmentKeybind,
+            ref registeredSaveAlignmentKeybind,
+            ref saveAlignmentControl);
 
         if (changed)
             input.CreateKeyControlsPriorityMap();
@@ -1067,6 +1147,13 @@ internal sealed class AutoDockController
             unbound,
             ref registeredNextPairKeybind,
             ref nextPairControl);
+        changed |= EnsureGameControl(
+            input,
+            SaveAlignmentControlId,
+            "AutoDock Save Alignment",
+            unbound,
+            ref registeredSaveAlignmentKeybind,
+            ref saveAlignmentControl);
 
         if (changed)
             input.CreateKeyControlsPriorityMap();
@@ -1111,6 +1198,11 @@ internal sealed class AutoDockController
         return IsControlNewPressed(nextPairControl, Config.Current.NextPairKeybind, input);
     }
 
+    private bool IsSaveAlignmentPressed(IMyInput input)
+    {
+        return IsControlNewPressed(saveAlignmentControl, Config.Current.SaveAlignmentKeybind, input);
+    }
+
     private static bool IsControlNewPressed(MyControl control, Binding binding, IMyInput input)
     {
         return control != null ? control.IsNewPressed() : binding.HasPressed(input);
@@ -1130,7 +1222,145 @@ internal sealed class AutoDockController
         if (lockReadyComparison != 0)
             return lockReadyComparison;
 
+        int savedAlignmentComparison = y.HasSavedAlignment.CompareTo(x.HasSavedAlignment);
+        if (savedAlignmentComparison != 0)
+            return savedAlignmentComparison;
+
         return x.Distance.CompareTo(y.Distance);
+    }
+
+    private bool TryGetPairForAlignmentSave(out DockingPair pair)
+    {
+        if (TryGetSelectedPair(out pair))
+            return true;
+
+        if (autoDockingPair != null)
+        {
+            pair = autoDockingPair;
+            return true;
+        }
+
+        return TryGetConnectedPair(out pair);
+    }
+
+    private static bool TryGetConnectedPair(out DockingPair pair)
+    {
+        pair = null;
+
+        MyCubeGrid controlledGrid = MySession.Static?.ControlledGrid;
+        if (controlledGrid == null || controlledGrid.MarkedForClose)
+            return false;
+
+        foreach (MyShipConnector localConnector in controlledGrid.GetFatBlocks<MyShipConnector>())
+        {
+            if (localConnector == null
+                || localConnector.MarkedForClose
+                || !localConnector.IsWorking
+                || localConnector.CubeGrid == null
+                || localConnector.CubeGrid.MarkedForClose
+                || !localConnector.HasLocalPlayerAccess())
+                continue;
+
+            MyShipConnector targetConnector = localConnector.Other;
+            if (targetConnector == null
+                || targetConnector.MarkedForClose
+                || targetConnector.CubeGrid == null
+                || targetConnector.CubeGrid.MarkedForClose
+                || targetConnector.CubeGrid == localConnector.CubeGrid)
+                continue;
+
+            double distance = Vector3D.Distance(localConnector.PositionComp.GetPosition(), targetConnector.PositionComp.GetPosition());
+            bool lockReady = IsLockReady(localConnector, targetConnector);
+            pair = new DockingPair(localConnector, targetConnector, distance, lockReady);
+            return true;
+        }
+
+        return false;
+    }
+
+    private static bool TryGetSavedConnectorAlignmentMatrix(DockingPair pair, out MatrixD relativeConnectorMatrix)
+    {
+        relativeConnectorMatrix = MatrixD.Identity;
+        if (!TryGetSavedAlignment(pair.Local.EntityId, pair.Target.EntityId, out SavedConnectorAlignment savedAlignment, out bool invert))
+            return false;
+
+        relativeConnectorMatrix = savedAlignment.GetRelativeConnectorMatrix();
+        if (invert)
+            relativeConnectorMatrix = MatrixD.Invert(relativeConnectorMatrix);
+
+        relativeConnectorMatrix.Translation = Vector3D.Zero;
+        return relativeConnectorMatrix.IsValid();
+    }
+
+    private static bool TryGetSavedAlignment(long localConnectorId, long targetConnectorId, out SavedConnectorAlignment savedAlignment, out bool invert)
+    {
+        List<SavedConnectorAlignment> savedAlignments = Config.Current.SavedAlignments;
+        for (int i = 0; i < savedAlignments.Count; i++)
+        {
+            SavedConnectorAlignment candidate = savedAlignments[i];
+            if (candidate.Matches(localConnectorId, targetConnectorId))
+            {
+                savedAlignment = candidate;
+                invert = false;
+                return true;
+            }
+
+            if (candidate.Matches(targetConnectorId, localConnectorId))
+            {
+                savedAlignment = candidate;
+                invert = true;
+                return true;
+            }
+        }
+
+        savedAlignment = null;
+        invert = false;
+        return false;
+    }
+
+    private static bool HasSavedAlignment(long localConnectorId, long targetConnectorId)
+    {
+        return TryGetSavedAlignment(localConnectorId, targetConnectorId, out _, out _);
+    }
+
+    private static bool TryBuildRelativeConnectorAlignment(MyShipConnector localConnector, MyShipConnector targetConnector, out MatrixD relativeConnectorMatrix)
+    {
+        relativeConnectorMatrix = MatrixD.Identity;
+        if (localConnector == null || targetConnector == null)
+            return false;
+
+        MatrixD localConnectorWorldMatrix = localConnector.WorldMatrix;
+        localConnectorWorldMatrix.Translation = Vector3D.Zero;
+        MatrixD targetConnectorWorldMatrix = targetConnector.WorldMatrix;
+        targetConnectorWorldMatrix.Translation = Vector3D.Zero;
+
+        relativeConnectorMatrix = localConnectorWorldMatrix * MatrixD.Invert(targetConnectorWorldMatrix);
+        relativeConnectorMatrix.Translation = Vector3D.Zero;
+        return relativeConnectorMatrix.IsValid();
+    }
+
+    private static SavedConnectorAlignment GetOrCreateSavedAlignment(long localConnectorId, long targetConnectorId)
+    {
+        List<SavedConnectorAlignment> savedAlignments = Config.Current.SavedAlignments;
+        for (int i = 0; i < savedAlignments.Count; i++)
+        {
+            SavedConnectorAlignment alignment = savedAlignments[i];
+            if (!alignment.Matches(localConnectorId, targetConnectorId)
+                && !alignment.Matches(targetConnectorId, localConnectorId))
+                continue;
+
+            alignment.LocalConnectorId = localConnectorId;
+            alignment.TargetConnectorId = targetConnectorId;
+            return alignment;
+        }
+
+        var newAlignment = new SavedConnectorAlignment
+        {
+            LocalConnectorId = localConnectorId,
+            TargetConnectorId = targetConnectorId
+        };
+        savedAlignments.Add(newAlignment);
+        return newAlignment;
     }
 
     private static void Notify(string message, string font)
@@ -1158,6 +1388,7 @@ internal sealed class AutoDockController
     {
         public readonly MyShipConnector Local;
         public readonly MyShipConnector Target;
+        public readonly bool HasSavedAlignment;
         public double Distance { get; private set; }
         public bool InRange { get; private set; }
         public bool LockReady { get; private set; }
@@ -1166,6 +1397,7 @@ internal sealed class AutoDockController
         {
             Local = local;
             Target = target;
+            HasSavedAlignment = HasSavedAlignment(local.EntityId, target.EntityId);
             Distance = distance;
             InRange = IsWithinSearchRange(distance);
             LockReady = lockReady;
