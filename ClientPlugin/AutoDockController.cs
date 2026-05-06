@@ -24,13 +24,32 @@ internal sealed class AutoDockController
     private const float MinSearchRadius = 1f;
     private const float MaxSearchRadius = 30f;
     private const double MinConnectorDistanceSquared = 0.0001;
-    private const double AutoDockFinishDistance = 0.12;
-    private const double AutoDockFinishAngle = 0.01;
     private const int AutoDockTimeoutFrames = 60 * 15;
-    private const double AutoDockApproachDistance = 4.0;
-    private const double AutoDockFinalLateralDistance = 1.35;
-    private const double AutoDockFinalForwardDistance = 1.1;
-    private const double AutoDockInputDeadzone = 0.12;
+    private const double AutoDockPositionTolerance = 0.12;
+    private const double AutoDockOrientationTolerance = 0.01;
+    private const double AutoDockControlStepSeconds = 1.0 / 60.0;
+    private const double AutoDockLinearProportionalGain = 0.75;
+    private const double AutoDockLinearIntegralGain = 0.22;
+    private const double AutoDockLinearDerivativeGain = 1.35;
+    private const double AutoDockLinearIntegralLimit = 6.0;
+    private const double AutoDockLinearIntegralActivationDistance = 5.0;
+    private const double AutoDockMaxLinearAcceleration = 2.5;
+    private const double AutoDockFinalApproachDistance = 2.75;
+    private const double AutoDockFinalApproachOrientationThreshold = 0.35;
+    private const double AutoDockFinalPlanarProportionalBoost = 1.8;
+    private const double AutoDockFinalPlanarIntegralBoost = 0.75;
+    private const double AutoDockFinalPlanarDerivativeBoost = 1.15;
+    private const double AutoDockFinalPlanarHoldDistance = 0.35;
+    private const double AutoDockFinalAxialSuppression = 0.75;
+    private const double AutoDockAngularProportionalGain = 2.0;
+    private const double AutoDockAngularIntegralGain = 0.08;
+    private const double AutoDockAngularIntegralLimit = 0.35;
+    private const double AutoDockMaxAngularVelocity = 0.45;
+    private const double AutoDockAngularVelocityGain = 1.8;
+    private const double AutoDockAngularSofteningThreshold = 0.35;
+    private const float AutoDockAngularMinTorque = 0.35f;
+    private const float AutoDockAngularMaxTorque = 0.8f;
+    private const double ManualInputDeadzone = 0.12;
     private const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
@@ -53,6 +72,8 @@ internal sealed class AutoDockController
     private int autoDockFrames;
     private bool autoDockConnectRequested;
     private bool autoDockWaitingForLockNotified;
+    private Vector3D autoDockPositionErrorIntegral;
+    private Vector3D autoDockOrientationErrorIntegral;
 
     public void Update()
     {
@@ -178,6 +199,7 @@ internal sealed class AutoDockController
         autoDockFrames = 0;
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
+        ResetAutoDockPidState();
         active = true;
         Notify("AutoDock: moving selected grid into docking position.", "White");
     }
@@ -196,7 +218,7 @@ internal sealed class AutoDockController
 
         if (IsDocked(pair))
         {
-            Notify("AutoDock: docked.", "Green");
+            Notify("AutoDock: connector lock succeeded.", "Green");
             ClearSelection();
             return;
         }
@@ -257,6 +279,14 @@ internal sealed class AutoDockController
             autoDockConnectRequested = true;
             ReleaseShipControl(pair.Local.CubeGrid);
             ((IMyShipConnector)pair.Local).Connect();
+            pair.RefreshMetrics();
+            if (IsDocked(pair))
+            {
+                Notify("AutoDock: connector lock succeeded.", "Green");
+                ClearSelection();
+                return;
+            }
+
             Notify("AutoDock: connector lock requested.", "Green");
         }
     }
@@ -264,6 +294,7 @@ internal sealed class AutoDockController
     private void CancelAutoDock(string message, string font)
     {
         ReleaseShipControl(autoDockingPair?.Local?.CubeGrid);
+        ResetAutoDockPidState();
         autoDockingPair = null;
         autoDockFrames = 0;
         autoDockConnectRequested = false;
@@ -421,18 +452,22 @@ internal sealed class AutoDockController
 
     private static bool HasManualFlightInput()
     {
-        if (MyInput.Static == null)
+        IMyInput input = MyInput.Static;
+        if (input == null)
             return false;
 
-        Vector3 moveInput = MyInput.Static.GetPositionDelta();
-        if (moveInput.LengthSquared() > AutoDockInputDeadzone * AutoDockInputDeadzone)
+        Vector3 moveInput = input.GetPositionDelta();
+        if (moveInput.LengthSquared() > ManualInputDeadzone * ManualInputDeadzone)
             return true;
 
-        Vector2 rotationInput = MyInput.Static.GetRotation();
-        if (rotationInput.LengthSquared() > AutoDockInputDeadzone * AutoDockInputDeadzone)
-            return true;
+        if (!input.IsAnyAltKeyPressed())
+        {
+            Vector2 rotationInput = input.GetRotation();
+            if (rotationInput.LengthSquared() > ManualInputDeadzone * ManualInputDeadzone)
+                return true;
+        }
 
-        return Math.Abs(MyInput.Static.GetRoll()) > AutoDockInputDeadzone;
+        return Math.Abs(input.GetRoll()) > ManualInputDeadzone;
     }
 
     private static bool IsPairStillUsable(DockingPair pair)
@@ -474,32 +509,13 @@ internal sealed class AutoDockController
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
         Vector3D targetConstraintPosition = pair.Target.ConstraintPositionWorld();
-        Vector3D targetForward = pair.Target.WorldMatrix.Forward;
-        if (targetForward.LengthSquared() < MinConnectorDistanceSquared)
+        if (!TryCreateDockingWorldMatrix(pair, targetConstraintPosition, out MatrixD targetMatrix))
             return false;
 
-        Vector3D desiredConstraintPosition = GetDesiredConstraintPosition(currentConstraintPosition, targetConstraintPosition, targetForward);
-        if (!TryCreateDockingWorldMatrix(pair, desiredConstraintPosition, out MatrixD targetMatrix))
-            return false;
-
-        bool finalApproach = Vector3D.DistanceSquared(desiredConstraintPosition, targetConstraintPosition) <= AutoDockFinishDistance * AutoDockFinishDistance;
-        bool positionReady = Vector3D.DistanceSquared(currentConstraintPosition, targetConstraintPosition) <= AutoDockFinishDistance * AutoDockFinishDistance;
-        bool angleReady = GetOrientationErrorVector(currentGridMatrix, targetMatrix).LengthSquared() <= AutoDockFinishAngle * AutoDockFinishAngle;
-        target = new DockingTarget(targetMatrix, desiredConstraintPosition, finalApproach, finalApproach && positionReady && angleReady);
+        bool positionReady = Vector3D.DistanceSquared(currentConstraintPosition, targetConstraintPosition) <= AutoDockPositionTolerance * AutoDockPositionTolerance;
+        bool angleReady = GetOrientationErrorVector(currentGridMatrix, targetMatrix).LengthSquared() <= AutoDockOrientationTolerance * AutoDockOrientationTolerance;
+        target = new DockingTarget(targetMatrix, targetConstraintPosition, positionReady && angleReady);
         return true;
-    }
-
-    private static Vector3D GetDesiredConstraintPosition(Vector3D currentConstraintPosition, Vector3D targetConstraintPosition, Vector3D targetForward)
-    {
-        Vector3D forward = Vector3D.Normalize(targetForward);
-        Vector3D offset = currentConstraintPosition - targetConstraintPosition;
-        double forwardDistance = Vector3D.Dot(offset, forward);
-        Vector3D lateral = offset - forward * forwardDistance;
-
-        if (lateral.LengthSquared() > AutoDockFinalLateralDistance * AutoDockFinalLateralDistance || forwardDistance < AutoDockFinalForwardDistance)
-            return targetConstraintPosition + forward * AutoDockApproachDistance;
-
-        return targetConstraintPosition;
     }
 
     private static bool TryCreateDockingWorldMatrix(DockingPair pair, Vector3D desiredConstraintPosition, out MatrixD targetMatrix)
@@ -588,7 +604,7 @@ internal sealed class AutoDockController
         if (!TryGetGridRotationTarget(pair, out MatrixD targetOrientation))
             return false;
 
-        MatrixD desiredControllerMatrix = GetDesiredControllerWorldMatrix(controller, pair.Local.CubeGrid, targetOrientation);
+        MatrixD desiredControllerMatrix = GetDesiredControllerWorldMatrix(controller, targetOrientation);
         Vector3D desiredControllerUp = desiredControllerMatrix.Up;
         if (desiredControllerUp.LengthSquared() < MinConnectorDistanceSquared)
             return false;
@@ -617,7 +633,7 @@ internal sealed class AutoDockController
         return Vector3D.Up;
     }
 
-    private static MatrixD GetDesiredControllerWorldMatrix(MyShipController controller, MyCubeGrid grid, MatrixD targetGridMatrix)
+    private static MatrixD GetDesiredControllerWorldMatrix(MyShipController controller, MatrixD targetGridMatrix)
     {
         MatrixD controllerLocalMatrix = controller.PositionComp.LocalMatrixRef;
         return controllerLocalMatrix * targetGridMatrix;
@@ -660,154 +676,135 @@ internal sealed class AutoDockController
         return Math.Atan2(sine, cosine);
     }
 
-    private static void ApplyAutoDockControl(DockingPair pair, MyShipController controller, DockingTarget target)
+    private void ApplyAutoDockControl(DockingPair pair, MyShipController controller, DockingTarget target)
     {
         MyCubeGrid grid = pair.Local.CubeGrid;
-        MyEntityThrustComponent thrustComponent = controller.EntityThrustComponent;
-        MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
         MatrixD inverseGridMatrix = grid.PositionComp.WorldMatrixNormalizedInv;
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
         Vector3D targetVelocity = pair.Target.CubeGrid.Physics.LinearVelocity;
         Vector3D currentVelocity = pair.Local.CubeGrid.Physics.LinearVelocity;
-        Vector3D relativeVelocity = currentVelocity - targetVelocity;
-        float shipMass = controller.CalculateShipMass().PhysicalMass;
+        MyEntityThrustComponent thrustComponent = controller.EntityThrustComponent;
+        MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
 
         Vector3D positionError = target.ConstraintPosition - currentConstraintPosition;
-        Vector3D localPositionErrorD = Vector3D.TransformNormal(positionError, inverseGridMatrix);
-        Vector3D localVelocityD = Vector3D.TransformNormal(relativeVelocity, inverseGridMatrix);
-        Vector3 localPositionError = new Vector3((float)localPositionErrorD.X, (float)localPositionErrorD.Y, (float)localPositionErrorD.Z);
-        Vector3 localVelocity = new Vector3((float)localVelocityD.X, (float)localVelocityD.Y, (float)localVelocityD.Z);
-
-        float maxSpeed = target.FinalApproach ? 1.25f : 6f;
-        float maxCommand = target.FinalApproach ? 0.35f : 1f;
-        Vector3 desiredLocalVelocity = Vector3.Clamp(localPositionError * 0.65f, new Vector3(-maxSpeed), new Vector3(maxSpeed));
-        Vector3 desiredLocalAcceleration = Vector3.Clamp((desiredLocalVelocity - localVelocity) * 1.6f, new Vector3(-6f * maxCommand), new Vector3(6f * maxCommand));
-        Vector3 localForceCommand = desiredLocalAcceleration * shipMass;
-
-        Vector3D gravity = controller.GetNaturalGravity();
-        if (gravity.LengthSquared() > MinConnectorDistanceSquared)
-        {
-            Vector3D localGravityD = Vector3D.TransformNormal(gravity, inverseGridMatrix);
-            Vector3 localGravity = new Vector3((float)localGravityD.X, (float)localGravityD.Y, (float)localGravityD.Z);
-            localForceCommand -= localGravity * shipMass;
-
-            Vector3D gravityUp = -Vector3D.Normalize(gravity);
-            float verticalError = (float)Vector3D.Dot(positionError, gravityUp);
-            float verticalVelocity = (float)Vector3D.Dot(relativeVelocity, gravityUp);
-            float desiredVerticalSpeed = MathHelper.Clamp(verticalError * 0.65f, -Math.Max(1.5f, maxSpeed), maxSpeed);
-            bool allowGravityDescent = verticalError < -0.25f && verticalVelocity > desiredVerticalSpeed - 0.2f;
-            if (allowGravityDescent)
-            {
-                Vector3D worldForceCommand = Vector3D.TransformNormal(localForceCommand, currentGridMatrix);
-                double upwardForce = Vector3D.Dot(worldForceCommand, gravityUp);
-                if (upwardForce > 0.0)
-                {
-                    worldForceCommand -= gravityUp * upwardForce;
-                    Vector3D adjustedLocalForceD = Vector3D.TransformNormal(worldForceCommand, inverseGridMatrix);
-                    localForceCommand = new Vector3((float)adjustedLocalForceD.X, (float)adjustedLocalForceD.Y, (float)adjustedLocalForceD.Z);
-                }
-            }
-        }
-
+        Vector3D errorVelocity = targetVelocity - currentVelocity;
         Vector3D orientationError = GetOrientationErrorVector(currentGridMatrix, target.WorldMatrix);
+        if (positionError.LengthSquared() <= AutoDockLinearIntegralActivationDistance * AutoDockLinearIntegralActivationDistance)
+            autoDockPositionErrorIntegral += positionError * AutoDockControlStepSeconds;
+        else
+            autoDockPositionErrorIntegral = Vector3D.Zero;
+
+        autoDockPositionErrorIntegral = ClampVectorMagnitude(autoDockPositionErrorIntegral, AutoDockLinearIntegralLimit);
+
+        Vector3D desiredWorldAcceleration = GetDesiredWorldAcceleration(
+            pair.Target,
+            positionError,
+            autoDockPositionErrorIntegral,
+            errorVelocity,
+            orientationError);
+        desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, AutoDockMaxLinearAcceleration);
+        Vector3D desiredLocalAccelerationD = Vector3D.TransformNormal(desiredWorldAcceleration, inverseGridMatrix);
+        Vector3 localThrustCommand = new Vector3(
+            (float)(desiredLocalAccelerationD.X / AutoDockMaxLinearAcceleration),
+            (float)(desiredLocalAccelerationD.Y / AutoDockMaxLinearAcceleration),
+            (float)(desiredLocalAccelerationD.Z / AutoDockMaxLinearAcceleration));
+        localThrustCommand = Vector3.Clamp(localThrustCommand, -Vector3.One, Vector3.One);
+
+        autoDockOrientationErrorIntegral += orientationError * AutoDockControlStepSeconds;
+        autoDockOrientationErrorIntegral = ClampVectorMagnitude(autoDockOrientationErrorIntegral, AutoDockAngularIntegralLimit);
+
         Vector3D angularVelocity = grid.Physics.AngularVelocity;
-        Vector3D worldTorque = orientationError * 3.0 - angularVelocity * 0.35;
+        Vector3D desiredAngularVelocity =
+            orientationError * AutoDockAngularProportionalGain
+            + autoDockOrientationErrorIntegral * AutoDockAngularIntegralGain;
+        desiredAngularVelocity = ClampVectorMagnitude(desiredAngularVelocity, AutoDockMaxAngularVelocity);
+
+        Vector3D worldTorque = (desiredAngularVelocity - angularVelocity) * AutoDockAngularVelocityGain;
         Vector3D localTorqueD = Vector3D.TransformNormal(worldTorque, inverseGridMatrix);
         Vector3 localTorque = new Vector3((float)localTorqueD.X, (float)localTorqueD.Y, (float)localTorqueD.Z);
-        localTorque = Vector3.Clamp(localTorque, -Vector3.One, Vector3.One);
-
-        if (controller is Sandbox.ModAPI.Ingame.IMyShipController shipController)
-        {
-            shipController.ControlThrusters = true;
-            shipController.DampenersOverride = false;
-        }
-        controller.ControlGyros = true;
+        float torqueLimit = MathHelper.Lerp(
+            AutoDockAngularMinTorque,
+            AutoDockAngularMaxTorque,
+            MathHelper.Clamp((float)(orientationError.Length() / AutoDockAngularSofteningThreshold), 0f, 1f));
+        localTorque = Vector3.ClampToSphere(localTorque, torqueLimit);
 
         if (thrustComponent != null)
         {
-            thrustComponent.AutoPilotControlThrust = Vector3.Zero;
-            thrustComponent.AutopilotEnabled = false;
             thrustComponent.Enabled = true;
+            thrustComponent.AutopilotEnabled = true;
+            thrustComponent.AutoPilotControlThrust = localThrustCommand;
             thrustComponent.MarkDirty();
         }
-
-        ApplyThrustOverrides(grid, localForceCommand);
 
         if (gyroSystem != null)
         {
             gyroSystem.AutopilotEnabled = true;
             gyroSystem.ControlTorque = localTorque;
+            gyroSystem.MarkDirty();
         }
     }
 
-    private static void ApplyThrustOverrides(MyCubeGrid grid, Vector3 desiredLocalForce)
+    private static Vector3D GetDesiredWorldAcceleration(
+        MyShipConnector targetConnector,
+        Vector3D positionError,
+        Vector3D positionErrorIntegral,
+        Vector3D errorVelocity,
+        Vector3D orientationError)
     {
-        const int DirectionCount = 6;
-        var totalForceByDirection = new float[DirectionCount];
-        var requestedForceByDirection = new float[DirectionCount];
-
-        foreach (MyThrust thruster in grid.GetFatBlocks<MyThrust>())
+        if (!TryGetDockingApproachAxis(targetConnector, out Vector3D approachAxis))
         {
-            if (thruster == null || thruster.MarkedForClose || !thruster.IsWorking)
-                continue;
-
-            int directionIndex = GetDirectionIndex(-thruster.ThrustForwardVector);
-            if (directionIndex < 0)
-                continue;
-
-            totalForceByDirection[directionIndex] += ((Sandbox.ModAPI.Ingame.IMyThrust)thruster).MaxEffectiveThrust;
+            return positionError * AutoDockLinearProportionalGain
+                   + positionErrorIntegral * AutoDockLinearIntegralGain
+                   + errorVelocity * AutoDockLinearDerivativeGain;
         }
 
-        requestedForceByDirection[0] = Math.Max(0f, desiredLocalForce.X);
-        requestedForceByDirection[1] = Math.Max(0f, -desiredLocalForce.X);
-        requestedForceByDirection[2] = Math.Max(0f, desiredLocalForce.Y);
-        requestedForceByDirection[3] = Math.Max(0f, -desiredLocalForce.Y);
-        requestedForceByDirection[4] = Math.Max(0f, desiredLocalForce.Z);
-        requestedForceByDirection[5] = Math.Max(0f, -desiredLocalForce.Z);
+        Vector3D axialPositionError = approachAxis * Vector3D.Dot(positionError, approachAxis);
+        Vector3D planarPositionError = positionError - axialPositionError;
+        Vector3D axialIntegralError = approachAxis * Vector3D.Dot(positionErrorIntegral, approachAxis);
+        Vector3D planarIntegralError = positionErrorIntegral - axialIntegralError;
+        Vector3D axialVelocityError = approachAxis * Vector3D.Dot(errorVelocity, approachAxis);
+        Vector3D planarVelocityError = errorVelocity - axialVelocityError;
 
-        foreach (MyThrust thruster in grid.GetFatBlocks<MyThrust>())
-        {
-            if (thruster == null || thruster.MarkedForClose || !thruster.IsWorking)
-                continue;
+        double finalApproachBlend = GetFinalApproachBlend(
+            Math.Abs(Vector3D.Dot(positionError, approachAxis)),
+            orientationError.Length());
+        double planarProportionalGain = AutoDockLinearProportionalGain * (1.0 + finalApproachBlend * AutoDockFinalPlanarProportionalBoost);
+        double planarIntegralGain = AutoDockLinearIntegralGain * (1.0 + finalApproachBlend * AutoDockFinalPlanarIntegralBoost);
+        double planarDerivativeGain = AutoDockLinearDerivativeGain * (1.0 + finalApproachBlend * AutoDockFinalPlanarDerivativeBoost);
+        double planarHoldStrength = MathHelper.Clamp((float)(planarPositionError.Length() / AutoDockFinalPlanarHoldDistance), 0f, 1f);
+        double axialScale = 1.0 - finalApproachBlend * planarHoldStrength * AutoDockFinalAxialSuppression;
 
-            int directionIndex = GetDirectionIndex(-thruster.ThrustForwardVector);
-            if (directionIndex < 0)
-            {
-                thruster.ThrustOverride = 0f;
-                continue;
-            }
-
-            float totalDirectionForce = totalForceByDirection[directionIndex];
-            float requestedDirectionForce = requestedForceByDirection[directionIndex];
-            if (totalDirectionForce <= 0f || requestedDirectionForce <= 0f)
-            {
-                thruster.ThrustOverride = 0f;
-                continue;
-            }
-
-            float thrusterMaxForce = ((Sandbox.ModAPI.Ingame.IMyThrust)thruster).MaxEffectiveThrust;
-            float assignedForce = Math.Min(thrusterMaxForce, requestedDirectionForce * (thrusterMaxForce / totalDirectionForce));
-            thruster.ThrustOverride = assignedForce;
-        }
+        return axialPositionError * (AutoDockLinearProportionalGain * axialScale)
+               + axialIntegralError * (AutoDockLinearIntegralGain * axialScale)
+               + axialVelocityError * (AutoDockLinearDerivativeGain * axialScale)
+               + planarPositionError * planarProportionalGain
+               + planarIntegralError * planarIntegralGain
+               + planarVelocityError * planarDerivativeGain;
     }
 
-    private static int GetDirectionIndex(Vector3I direction)
+    private static double GetFinalApproachBlend(double axialDistance, double orientationMagnitude)
     {
-        if (direction.X > 0)
-            return 0;
-        if (direction.X < 0)
-            return 1;
-        if (direction.Y > 0)
-            return 2;
-        if (direction.Y < 0)
-            return 3;
-        if (direction.Z > 0)
-            return 4;
-        if (direction.Z < 0)
-            return 5;
+        if (axialDistance >= AutoDockFinalApproachDistance)
+            return 0.0;
 
-        return -1;
+        double distanceBlend = 1.0 - axialDistance / AutoDockFinalApproachDistance;
+        double orientationBlend = 1.0 - MathHelper.Clamp((float)(orientationMagnitude / AutoDockFinalApproachOrientationThreshold), 0f, 1f);
+        return distanceBlend * orientationBlend;
+    }
+
+    private static bool TryGetDockingApproachAxis(MyShipConnector targetConnector, out Vector3D approachAxis)
+    {
+        approachAxis = Vector3D.Zero;
+        if (targetConnector == null)
+            return false;
+
+        approachAxis = targetConnector.WorldMatrix.Forward;
+        if (approachAxis.LengthSquared() < MinConnectorDistanceSquared)
+            return false;
+
+        approachAxis.Normalize();
+        return true;
     }
 
     private static Vector3D GetOrientationErrorVector(MatrixD currentMatrix, MatrixD targetMatrix)
@@ -817,7 +814,25 @@ internal sealed class AutoDockController
                + Vector3D.Cross(currentMatrix.Right, targetMatrix.Right);
     }
 
-    private static void ReleaseShipControl(MyCubeGrid grid)
+    private static Vector3D ClampVectorMagnitude(Vector3D vector, double maxLength)
+    {
+        if (maxLength <= 0.0)
+            return Vector3D.Zero;
+
+        double lengthSquared = vector.LengthSquared();
+        if (lengthSquared <= maxLength * maxLength || lengthSquared < MinConnectorDistanceSquared)
+            return vector;
+
+        return vector * (maxLength / Math.Sqrt(lengthSquared));
+    }
+
+    private void ResetAutoDockPidState()
+    {
+        autoDockPositionErrorIntegral = Vector3D.Zero;
+        autoDockOrientationErrorIntegral = Vector3D.Zero;
+    }
+
+    private void ReleaseShipControl(MyCubeGrid grid)
     {
         if (grid == null)
             return;
@@ -825,10 +840,6 @@ internal sealed class AutoDockController
         if (TryGetActiveShipController(grid, out MyShipController controller))
         {
             controller.MoveAndRotateStopped();
-            if (controller is Sandbox.ModAPI.Ingame.IMyShipController shipController)
-            {
-                shipController.DampenersOverride = true;
-            }
         }
 
         MyEntityThrustComponent thrustComponent = grid.Components?.Get<MyEntityThrustComponent>();
@@ -838,12 +849,6 @@ internal sealed class AutoDockController
             thrustComponent.AutopilotEnabled = false;
             thrustComponent.Enabled = true;
             thrustComponent.MarkDirty();
-        }
-
-        foreach (MyThrust thruster in grid.GetFatBlocks<MyThrust>())
-        {
-            if (thruster != null && !thruster.MarkedForClose)
-                thruster.ThrustOverride = 0f;
         }
 
         MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
@@ -877,17 +882,17 @@ internal sealed class AutoDockController
     private static Color GetBoxColor(DockingPair pair, bool selected)
     {
         if (!pair.InRange)
-            return selected ? new Color(0.45f, 0.45f, 0.45f, 0.55f) : new Color(0.45f, 0.45f, 0.45f, 0.28f);
+            return selected ? new Color(1f, 0.9f, 0f, 0.55f) : new Color(1f, 0.9f, 0f, 0.32f);
 
-        return selected ? new Color(0f, 0.7f, 1f, 0.6f) : new Color(0f, 0.7f, 1f, 0.32f);
+        return selected ? new Color(0f, 0.7f, 1f, 0.6f) : new Color(0.55f, 0.55f, 0.55f, 0.32f);
     }
 
     private static Color GetLineColor(DockingPair pair, bool selected)
     {
         if (!pair.InRange)
-            return selected ? new Color(1f, 0.8f, 0f, 0.75f) : new Color(1f, 0.8f, 0f, 0.4f);
+            return selected ? new Color(1f, 0f, 0f, 0.75f) : new Color(1f, 0f, 0f, 0.45f);
 
-        return selected ? new Color(0f, 1f, 0.25f, 0.75f) : new Color(0f, 1f, 0.25f, 0.4f);
+        return selected ? new Color(0f, 1f, 0.25f, 0.75f) : new Color(1f, 0.85f, 0f, 0.45f);
     }
 
     private static void DrawConnectorBox(MyShipConnector connector, Color color, bool selected)
@@ -977,6 +982,7 @@ internal sealed class AutoDockController
     private void ClearSelection()
     {
         ReleaseShipControl(autoDockingPair?.Local?.CubeGrid);
+        ResetAutoDockPidState();
         active = false;
         selectedIndex = -1;
         pairs.Clear();
@@ -1138,14 +1144,12 @@ internal sealed class AutoDockController
     {
         public readonly MatrixD WorldMatrix;
         public readonly Vector3D ConstraintPosition;
-        public readonly bool FinalApproach;
         public readonly bool DockingReady;
 
-        public DockingTarget(MatrixD worldMatrix, Vector3D constraintPosition, bool finalApproach, bool dockingReady)
+        public DockingTarget(MatrixD worldMatrix, Vector3D constraintPosition, bool dockingReady)
         {
             WorldMatrix = worldMatrix;
             ConstraintPosition = constraintPosition;
-            FinalApproach = finalApproach;
             DockingReady = dockingReady;
         }
     }
