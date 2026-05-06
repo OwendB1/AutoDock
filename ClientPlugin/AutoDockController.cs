@@ -56,6 +56,7 @@ internal sealed class AutoDockController
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
     private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
     private static readonly MyStringId SaveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.SaveAlignmentKeybind");
+    private static readonly MyStringId RemoveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.RemoveAlignmentKeybind");
 
     private readonly List<DockingPair> pairs = new List<DockingPair>();
     private readonly List<MyShipConnector> localConnectors = new List<MyShipConnector>();
@@ -65,10 +66,12 @@ internal sealed class AutoDockController
     private Binding registeredPreviousPairKeybind = new Binding(MyKeys.None);
     private Binding registeredNextPairKeybind = new Binding(MyKeys.None);
     private Binding registeredSaveAlignmentKeybind = new Binding(MyKeys.None);
+    private Binding registeredRemoveAlignmentKeybind = new Binding(MyKeys.None);
     private MyControl activationControl;
     private MyControl previousPairControl;
     private MyControl nextPairControl;
     private MyControl saveAlignmentControl;
+    private MyControl removeAlignmentControl;
     private bool active;
     private int selectedIndex = -1;
     private int framesUntilRescan;
@@ -78,6 +81,7 @@ internal sealed class AutoDockController
     private bool autoDockWaitingForLockNotified;
     private Vector3D autoDockPositionErrorIntegral;
     private Vector3D autoDockOrientationErrorIntegral;
+    private SavedAlignmentRemovalScreen removeAlignmentScreen;
 
     public void Update()
     {
@@ -91,8 +95,18 @@ internal sealed class AutoDockController
         EnsureGameControls(input);
 
         MyGuiScreenBase screenWithFocus = MyScreenManager.GetScreenWithFocus();
+        if (removeAlignmentScreen != null && screenWithFocus == removeAlignmentScreen)
+            removeAlignmentScreen.HandleExternalInput(input);
+
         if (screenWithFocus != null && screenWithFocus != MyGuiScreenGamePlay.Static)
         {
+            DrawPairs();
+            return;
+        }
+
+        if (IsRemoveAlignmentPressed(input))
+        {
+            HandleRemoveAlignmentPressed();
             DrawPairs();
             return;
         }
@@ -147,6 +161,8 @@ internal sealed class AutoDockController
 
     public void Dispose()
     {
+        removeAlignmentScreen?.CloseScreen();
+        removeAlignmentScreen = null;
         ClearSelection();
         UnregisterGameControls();
     }
@@ -887,6 +903,8 @@ internal sealed class AutoDockController
 
         SavedConnectorAlignment savedAlignment = GetOrCreateSavedAlignment(pair.Local.EntityId, pair.Target.EntityId);
         savedAlignment.SetRelativeConnectorMatrix(relativeConnectorMatrix);
+        savedAlignment.LocalGridName = GetGridDisplayName(pair.Local.CubeGrid);
+        savedAlignment.TargetGridName = GetGridDisplayName(pair.Target.CubeGrid);
         ConfigStorage.Save(Config.Current);
 
         if (active)
@@ -896,6 +914,66 @@ internal sealed class AutoDockController
         }
 
         Notify("AutoDock: saved connector alignment for current pair.", "Green");
+    }
+
+    private void HandleRemoveAlignmentPressed()
+    {
+        if (TryGetConnectedPair(out DockingPair pair)
+            && TryGetSavedAlignment(pair.Local.EntityId, pair.Target.EntityId, out SavedConnectorAlignment savedAlignment, out _))
+        {
+            RemoveSavedAlignment(savedAlignment, $"AutoDock: removed saved alignment for {savedAlignment.GetDisplayName(GetGridDisplayName(pair.Local.CubeGrid))}.");
+            return;
+        }
+
+        OpenRemoveAlignmentScreen();
+    }
+
+    private void OpenRemoveAlignmentScreen()
+    {
+        if (removeAlignmentScreen != null)
+            return;
+
+        List<SavedConnectorAlignment> savedAlignments = Config.Current.SavedAlignments;
+        if (savedAlignments.Count == 0)
+        {
+            Notify("AutoDock: no saved alignments to remove.", "Red");
+            return;
+        }
+
+        string currentGridName = GetGridDisplayName(MySession.Static?.ControlledGrid);
+        var screen = new SavedAlignmentRemovalScreen(savedAlignments, currentGridName, HandlePopupAlignmentRemoval);
+        screen.Closed += (_, _) =>
+        {
+            if (ReferenceEquals(removeAlignmentScreen, screen))
+                removeAlignmentScreen = null;
+        };
+
+        removeAlignmentScreen = screen;
+        MyGuiSandbox.AddScreen(screen);
+    }
+
+    private void HandlePopupAlignmentRemoval(SavedConnectorAlignment savedAlignment)
+    {
+        if (savedAlignment == null)
+            return;
+
+        RemoveSavedAlignment(savedAlignment, $"AutoDock: removed saved alignment for {savedAlignment.GetDisplayName(GetGridDisplayName(MySession.Static?.ControlledGrid))}.");
+    }
+
+    private void RemoveSavedAlignment(SavedConnectorAlignment savedAlignment, string message)
+    {
+        if (savedAlignment == null || !Config.Current.SavedAlignments.Remove(savedAlignment))
+            return;
+
+        ConfigStorage.Save(Config.Current);
+
+        if (active)
+        {
+            RescanPairs(preserveSelection: true);
+            framesUntilRescan = RescanIntervalFrames;
+        }
+
+        Notify(message, "Green");
     }
 
     private void ResetAutoDockPidState()
@@ -1113,6 +1191,13 @@ internal sealed class AutoDockController
             Config.Current.SaveAlignmentKeybind,
             ref registeredSaveAlignmentKeybind,
             ref saveAlignmentControl);
+        changed |= EnsureGameControl(
+            input,
+            RemoveAlignmentControlId,
+            "AutoDock Remove Alignment",
+            Config.Current.RemoveAlignmentKeybind,
+            ref registeredRemoveAlignmentKeybind,
+            ref removeAlignmentControl);
 
         if (changed)
             input.CreateKeyControlsPriorityMap();
@@ -1154,6 +1239,13 @@ internal sealed class AutoDockController
             unbound,
             ref registeredSaveAlignmentKeybind,
             ref saveAlignmentControl);
+        changed |= EnsureGameControl(
+            input,
+            RemoveAlignmentControlId,
+            "AutoDock Remove Alignment",
+            unbound,
+            ref registeredRemoveAlignmentKeybind,
+            ref removeAlignmentControl);
 
         if (changed)
             input.CreateKeyControlsPriorityMap();
@@ -1201,6 +1293,11 @@ internal sealed class AutoDockController
     private bool IsSaveAlignmentPressed(IMyInput input)
     {
         return IsControlNewPressed(saveAlignmentControl, Config.Current.SaveAlignmentKeybind, input);
+    }
+
+    private bool IsRemoveAlignmentPressed(IMyInput input)
+    {
+        return IsControlNewPressed(removeAlignmentControl, Config.Current.RemoveAlignmentKeybind, input);
     }
 
     private static bool IsControlNewPressed(MyControl control, Binding binding, IMyInput input)
@@ -1321,6 +1418,14 @@ internal sealed class AutoDockController
     private static bool HasSavedAlignment(long localConnectorId, long targetConnectorId)
     {
         return TryGetSavedAlignment(localConnectorId, targetConnectorId, out _, out _);
+    }
+
+    private static string GetGridDisplayName(MyCubeGrid grid)
+    {
+        if (grid == null)
+            return "Unknown grid";
+
+        return string.IsNullOrWhiteSpace(grid.DisplayName) ? "Unknown grid" : grid.DisplayName;
     }
 
     private static bool TryBuildRelativeConnectorAlignment(MyShipConnector localConnector, MyShipConnector targetConnector, out MatrixD relativeConnectorMatrix)

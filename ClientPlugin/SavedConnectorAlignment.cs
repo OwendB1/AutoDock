@@ -6,6 +6,8 @@ public class SavedConnectorAlignment
 {
     public long LocalConnectorId { get; set; }
     public long TargetConnectorId { get; set; }
+    public string LocalGridName { get; set; }
+    public string TargetGridName { get; set; }
     public double ForwardX { get; set; }
     public double ForwardY { get; set; }
     public double ForwardZ { get; set; }
@@ -48,5 +50,24 @@ public class SavedConnectorAlignment
         UpX = up.X;
         UpY = up.Y;
         UpZ = up.Z;
+    }
+
+    public string GetDisplayName(string currentGridName = null)
+    {
+        string localName = string.IsNullOrWhiteSpace(LocalGridName) ? "Unknown grid" : LocalGridName;
+        string targetName = string.IsNullOrWhiteSpace(TargetGridName) ? "Unknown grid" : TargetGridName;
+
+        if (!string.IsNullOrWhiteSpace(currentGridName))
+        {
+            if (string.Equals(localName, currentGridName, System.StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(targetName, currentGridName, System.StringComparison.OrdinalIgnoreCase))
+                return targetName;
+
+            if (string.Equals(targetName, currentGridName, System.StringComparison.OrdinalIgnoreCase)
+                && !string.Equals(localName, currentGridName, System.StringComparison.OrdinalIgnoreCase))
+                return localName;
+        }
+
+        return $"{localName} <-> {targetName}";
     }
 }

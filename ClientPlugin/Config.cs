@@ -18,6 +18,7 @@ public class Config : INotifyPropertyChanged
     private Binding previousPairKeybind = new Binding(MyKeys.Up, ctrl: true);
     private Binding nextPairKeybind = new Binding(MyKeys.Down, ctrl: true);
     private Binding saveAlignmentKeybind = new Binding(MyKeys.L, ctrl: true);
+    private Binding removeAlignmentKeybind = new Binding(MyKeys.K, ctrl: true);
     private List<SavedConnectorAlignment> savedAlignments = new List<SavedConnectorAlignment>();
 
     #endregion
@@ -63,6 +64,13 @@ public class Config : INotifyPropertyChanged
     {
         get => saveAlignmentKeybind;
         set => SetField(ref saveAlignmentKeybind, value);
+    }
+
+    [Keybind(label: "Remove saved alignment", description: "Remove saved alignment for connected pair or open saved alignment removal list.")]
+    public Binding RemoveAlignmentKeybind
+    {
+        get => removeAlignmentKeybind;
+        set => SetField(ref removeAlignmentKeybind, value);
     }
 
     public List<SavedConnectorAlignment> SavedAlignments
