@@ -12,6 +12,7 @@ internal sealed class AutoDockPilot
     private bool autoDockConnectRequested;
     private bool autoDockWaitingForLockNotified;
     private int autoDockLockReadyFrames;
+    private bool autoDockFinalApproachStarted;
     private Vector3D autoDockPositionErrorIntegral;
     private Vector3D autoDockOrientationErrorIntegral;
 
@@ -30,6 +31,7 @@ internal sealed class AutoDockPilot
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
         autoDockLockReadyFrames = 0;
+        autoDockFinalApproachStarted = false;
         autoDockPositionErrorIntegral = Vector3D.Zero;
         autoDockOrientationErrorIntegral = Vector3D.Zero;
     }
@@ -76,13 +78,20 @@ internal sealed class AutoDockPilot
             autoDockLockReadyFrames = 0;
         }
 
-        if (!DockingMath.TryCreateDockingTarget(pair, lockRotationService, out DockingTarget target))
+        if (!DockingMath.TryCreateDockingTarget(
+                pair,
+                lockRotationService,
+                autoDockFinalApproachStarted,
+                out DockingTarget target,
+                out bool finalApproachStarted))
         {
             if (lockReadyAtStart)
                 return AutoDockPilotUpdateResult.Running;
 
             return Cancel("AutoDock: cannot calculate docking position.", "Red");
         }
+
+        autoDockFinalApproachStarted = finalApproachStarted;
 
         if (!DockingMath.TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
         {
@@ -167,6 +176,7 @@ internal sealed class AutoDockPilot
         autoDockConnectRequested = false;
         autoDockWaitingForLockNotified = false;
         autoDockLockReadyFrames = 0;
+        autoDockFinalApproachStarted = false;
         autoDockPositionErrorIntegral = Vector3D.Zero;
         autoDockOrientationErrorIntegral = Vector3D.Zero;
     }

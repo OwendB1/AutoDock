@@ -119,21 +119,38 @@ internal static class DockingMath
         return false;
     }
 
-    public static bool TryCreateDockingTarget(DockingPair pair, LockRotationService lockRotationService, out DockingTarget target)
+    public static bool TryCreateDockingTarget(
+        DockingPair pair,
+        LockRotationService lockRotationService,
+        bool finalApproachStarted,
+        out DockingTarget target,
+        out bool finalApproachActive)
     {
         target = null;
+        finalApproachActive = finalApproachStarted;
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
-        Vector3D targetConstraintPosition = pair.Target.ConstraintPositionWorld();
-        if (!TryCreateDockingWorldMatrix(pair, lockRotationService, targetConstraintPosition, out MatrixD targetMatrix))
+        Vector3D finalConstraintPosition = pair.Target.ConstraintPositionWorld();
+        if (!TryGetGridRotationTarget(pair, lockRotationService, out MatrixD targetOrientation))
             return false;
 
-        bool positionReady = Vector3D.DistanceSquared(currentConstraintPosition, targetConstraintPosition)
+        double orientationErrorMagnitude = GetOrientationErrorVector(currentGridMatrix, targetOrientation).Length();
+        Vector3D targetConstraintPosition = GetApproachConstraintPosition(
+            pair.Target,
+            currentConstraintPosition,
+            finalConstraintPosition,
+            orientationErrorMagnitude,
+            finalApproachStarted,
+            out finalApproachActive);
+        if (!TryCreateDockingWorldMatrix(pair, targetOrientation, targetConstraintPosition, out MatrixD targetMatrix))
+            return false;
+
+        bool positionReady = Vector3D.DistanceSquared(currentConstraintPosition, finalConstraintPosition)
                              <= AutoDockConstants.AutoDockPositionTolerance * AutoDockConstants.AutoDockPositionTolerance;
-        bool angleReady = GetOrientationErrorVector(currentGridMatrix, targetMatrix).LengthSquared()
+        bool angleReady = orientationErrorMagnitude * orientationErrorMagnitude
                           <= AutoDockConstants.AutoDockOrientationTolerance * AutoDockConstants.AutoDockOrientationTolerance;
-        target = new DockingTarget(targetMatrix, targetConstraintPosition, positionReady && angleReady);
+        target = new DockingTarget(targetMatrix, targetConstraintPosition, positionReady && angleReady, finalApproachActive);
         return true;
     }
 
@@ -195,20 +212,28 @@ internal static class DockingMath
             positionErrorIntegral = Vector3D.Zero;
         }
 
+        if (Vector3D.Dot(positionErrorIntegral, positionError) < 0.0)
+            positionErrorIntegral = Vector3D.Zero;
+
         positionErrorIntegral = ClampVectorMagnitude(positionErrorIntegral, AutoDockConstants.AutoDockLinearIntegralLimit);
+
+        double maxLinearAcceleration = target.FinalApproachActive
+            ? AutoDockConstants.AutoDockFinalApproachMaxLinearAcceleration
+            : AutoDockConstants.AutoDockMaxLinearAcceleration;
 
         Vector3D desiredWorldAcceleration = GetDesiredWorldAcceleration(
             pair.Target,
             positionError,
             positionErrorIntegral,
             errorVelocity,
-            orientationError);
-        desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, AutoDockConstants.AutoDockMaxLinearAcceleration);
+            maxLinearAcceleration,
+            target.FinalApproachActive);
+        desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
         Vector3D desiredLocalAccelerationD = Vector3D.TransformNormal(desiredWorldAcceleration, inverseGridMatrix);
         Vector3 localThrustCommand = new Vector3(
-            (float)(desiredLocalAccelerationD.X / AutoDockConstants.AutoDockMaxLinearAcceleration),
-            (float)(desiredLocalAccelerationD.Y / AutoDockConstants.AutoDockMaxLinearAcceleration),
-            (float)(desiredLocalAccelerationD.Z / AutoDockConstants.AutoDockMaxLinearAcceleration));
+            (float)(desiredLocalAccelerationD.X / maxLinearAcceleration),
+            (float)(desiredLocalAccelerationD.Y / maxLinearAcceleration),
+            (float)(desiredLocalAccelerationD.Z / maxLinearAcceleration));
         localThrustCommand = Vector3.Clamp(localThrustCommand, -Vector3.One, Vector3.One);
 
         orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
@@ -411,18 +436,47 @@ internal static class DockingMath
             out right);
     }
 
+    private static Vector3D GetApproachConstraintPosition(
+        MyShipConnector targetConnector,
+        Vector3D currentConstraintPosition,
+        Vector3D finalConstraintPosition,
+        double orientationErrorMagnitude,
+        bool finalApproachStarted,
+        out bool finalApproachActive)
+    {
+        finalApproachActive = finalApproachStarted;
+        if (!TryGetDockingApproachAxis(targetConnector, out Vector3D approachAxis))
+            return finalConstraintPosition;
+
+        Vector3D finalPositionError = finalConstraintPosition - currentConstraintPosition;
+        double signedAxialOffset = Vector3D.Dot(currentConstraintPosition - finalConstraintPosition, approachAxis);
+        double approachSign = signedAxialOffset < 0.0 ? -1.0 : 1.0;
+        Vector3D axialPositionError = approachAxis * Vector3D.Dot(finalPositionError, approachAxis);
+        Vector3D planarPositionError = finalPositionError - axialPositionError;
+        double axialDistance = Math.Abs(signedAxialOffset);
+        bool finalApproachReady =
+            finalApproachStarted
+            || (axialDistance <= AutoDockConstants.AutoDockFinalApproachDistance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance
+                && planarPositionError.LengthSquared()
+                <= AutoDockConstants.AutoDockFinalApproachPlanarTolerance * AutoDockConstants.AutoDockFinalApproachPlanarTolerance
+                && orientationErrorMagnitude <= AutoDockConstants.AutoDockFinalApproachOrientationThreshold);
+
+        finalApproachActive = finalApproachReady;
+        // Hold staging point 2 m out on same side of connector as ship until lateral alignment is done.
+        return finalApproachReady
+            ? finalConstraintPosition
+            : finalConstraintPosition + approachAxis * (approachSign * AutoDockConstants.AutoDockFinalApproachDistance);
+    }
+
     private static bool TryCreateDockingWorldMatrix(
         DockingPair pair,
-        LockRotationService lockRotationService,
+        MatrixD targetOrientation,
         Vector3D desiredConstraintPosition,
         out MatrixD targetMatrix)
     {
         targetMatrix = MatrixD.Identity;
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
-
-        if (!TryGetGridRotationTarget(pair, lockRotationService, out MatrixD targetOrientation))
-            return false;
 
         Vector3D localConstraintPosition = Vector3D.Transform(pair.Local.ConstraintPositionWorld(), MatrixD.Invert(currentGridMatrix));
         Vector3D transformedConstraintPosition = Vector3D.Transform(localConstraintPosition, targetOrientation);
@@ -628,13 +682,12 @@ internal static class DockingMath
         Vector3D positionError,
         Vector3D positionErrorIntegral,
         Vector3D errorVelocity,
-        Vector3D orientationError)
+        double maxLinearAcceleration,
+        bool finalApproachActive)
     {
         if (!TryGetDockingApproachAxis(targetConnector, out Vector3D approachAxis))
         {
-            return positionError * AutoDockConstants.AutoDockLinearProportionalGain
-                   + positionErrorIntegral * AutoDockConstants.AutoDockLinearIntegralGain
-                   + errorVelocity * AutoDockConstants.AutoDockLinearDerivativeGain;
+            return GetStabilizedAcceleration(positionError, positionErrorIntegral, errorVelocity, maxLinearAcceleration);
         }
 
         Vector3D axialPositionError = approachAxis * Vector3D.Dot(positionError, approachAxis);
@@ -643,36 +696,46 @@ internal static class DockingMath
         Vector3D planarIntegralError = positionErrorIntegral - axialIntegralError;
         Vector3D axialVelocityError = approachAxis * Vector3D.Dot(errorVelocity, approachAxis);
         Vector3D planarVelocityError = errorVelocity - axialVelocityError;
-
-        double finalApproachBlend = GetFinalApproachBlend(
-            Math.Abs(Vector3D.Dot(positionError, approachAxis)),
-            orientationError.Length());
-        double planarProportionalGain =
-            AutoDockConstants.AutoDockLinearProportionalGain * (1.0 + finalApproachBlend * AutoDockConstants.AutoDockFinalPlanarProportionalBoost);
-        double planarIntegralGain =
-            AutoDockConstants.AutoDockLinearIntegralGain * (1.0 + finalApproachBlend * AutoDockConstants.AutoDockFinalPlanarIntegralBoost);
-        double planarDerivativeGain =
-            AutoDockConstants.AutoDockLinearDerivativeGain * (1.0 + finalApproachBlend * AutoDockConstants.AutoDockFinalPlanarDerivativeBoost);
-        double planarHoldStrength = MathHelper.Clamp((float)(planarPositionError.Length() / AutoDockConstants.AutoDockFinalPlanarHoldDistance), 0f, 1f);
-        double axialScale = 1.0 - finalApproachBlend * planarHoldStrength * AutoDockConstants.AutoDockFinalAxialSuppression;
-
-        return axialPositionError * (AutoDockConstants.AutoDockLinearProportionalGain * axialScale)
-               + axialIntegralError * (AutoDockConstants.AutoDockLinearIntegralGain * axialScale)
-               + axialVelocityError * (AutoDockConstants.AutoDockLinearDerivativeGain * axialScale)
-               + planarPositionError * planarProportionalGain
-               + planarIntegralError * planarIntegralGain
-               + planarVelocityError * planarDerivativeGain;
+        return GetStabilizedAcceleration(
+                   axialPositionError,
+                   axialIntegralError,
+                   axialVelocityError,
+                   maxLinearAcceleration,
+                   enforceStoppingDistance: !finalApproachActive)
+               + GetStabilizedAcceleration(planarPositionError, planarIntegralError, planarVelocityError, maxLinearAcceleration);
     }
 
-    private static double GetFinalApproachBlend(double axialDistance, double orientationMagnitude)
+    private static Vector3D GetStabilizedAcceleration(
+        Vector3D positionError,
+        Vector3D positionErrorIntegral,
+        Vector3D errorVelocity,
+        double maxLinearAcceleration,
+        bool enforceStoppingDistance = true)
     {
-        if (axialDistance >= AutoDockConstants.AutoDockFinalApproachDistance)
-            return 0.0;
+        Vector3D desiredAcceleration =
+            positionError * AutoDockConstants.AutoDockLinearProportionalGain
+            + positionErrorIntegral * AutoDockConstants.AutoDockLinearIntegralGain
+            + errorVelocity * AutoDockConstants.AutoDockLinearDerivativeGain;
 
-        double distanceBlend = 1.0 - axialDistance / AutoDockConstants.AutoDockFinalApproachDistance;
-        double orientationBlend =
-            1.0 - MathHelper.Clamp((float)(orientationMagnitude / AutoDockConstants.AutoDockFinalApproachOrientationThreshold), 0f, 1f);
-        return distanceBlend * orientationBlend;
+        if (!enforceStoppingDistance)
+            return desiredAcceleration;
+
+        double distanceSquared = positionError.LengthSquared();
+        if (distanceSquared < AutoDockConstants.MinConnectorDistanceSquared)
+            return desiredAcceleration;
+
+        double distance = Math.Sqrt(distanceSquared);
+        Vector3D errorDirection = positionError / distance;
+        double errorVelocityAlongError = Vector3D.Dot(errorVelocity, errorDirection);
+        double closingSpeed = -errorVelocityAlongError;
+        double stoppingDistance = Math.Max(0.0, distance - AutoDockConstants.AutoDockLinearBrakePadding);
+        double maxClosingSpeed = Math.Sqrt(2.0 * maxLinearAcceleration * stoppingDistance);
+        if (closingSpeed <= maxClosingSpeed)
+            return desiredAcceleration;
+
+        // Too much closing speed for remaining distance. Spend full authority on braking.
+        Vector3D lateralAcceleration = desiredAcceleration - errorDirection * Vector3D.Dot(desiredAcceleration, errorDirection);
+        return lateralAcceleration - errorDirection * maxLinearAcceleration;
     }
 
     private static bool TryGetDockingApproachAxis(MyShipConnector targetConnector, out Vector3D approachAxis)
