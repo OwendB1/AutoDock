@@ -10,30 +10,33 @@ internal static class AutoDockConstants
     public const float MinSearchRadius = 1f;
     public const float MaxSearchRadius = 30f;
     public const double MinConnectorDistanceSquared = 0.0001;
-    public const int AutoDockTimeoutFrames = 60 * 15;
-    public const double AutoDockPositionTolerance = 0.12;
-    public const double AutoDockOrientationTolerance = 0.01;
-    public const double AutoDockControlStepSeconds = 1.0 / 60.0;
-    public const double AutoDockLinearProportionalGain = 0.65;
-    public const double AutoDockLinearIntegralGain = 0.22;
-    public const double AutoDockLinearDerivativeGain = 1.35;
-    public const double AutoDockLinearIntegralLimit = 6.0;
-    public const double AutoDockLinearIntegralActivationDistance = 5.0;
-    public const double AutoDockLinearBrakePadding = 0.05;
-    public const double AutoDockMaxLinearAcceleration = 4.0;
-    public const double AutoDockFinalApproachMaxLinearAcceleration = 3.0;
-    public const double AutoDockFinalApproachDistance = 2.0;
-    public const double AutoDockFinalApproachEntryDistanceTolerance = 0.35;
-    public const double AutoDockFinalApproachPlanarTolerance = 0.25;
-    public const double AutoDockFinalApproachOrientationThreshold = 0.35;
-    public const double AutoDockAngularProportionalGain = 2.0;
-    public const double AutoDockAngularIntegralGain = 0.08;
-    public const double AutoDockAngularIntegralLimit = 0.35;
-    public const double AutoDockMaxAngularVelocity = 0.65;
-    public const double AutoDockAngularVelocityGain = 1.8;
-    public const double AutoDockAngularSofteningThreshold = 0.35;
-    public const float AutoDockAngularMinTorque = 0.35f;
-    public const float AutoDockAngularMaxTorque = 0.8f;
+    public static int AutoDockTimeoutFrames => GetPositiveInt(Config.Current.AutoDockTimeoutFrames, Config.Default.AutoDockTimeoutFrames);
+    public static double AutoDockPositionTolerance => GetFiniteDouble(Config.Current.AutoDockPositionTolerance, Config.Default.AutoDockPositionTolerance, 0.0);
+    public static double AutoDockOrientationTolerance => GetFiniteDouble(Config.Current.AutoDockOrientationTolerance, Config.Default.AutoDockOrientationTolerance, 0.0);
+    public static double AutoDockControlStepSeconds => GetFiniteDouble(Config.Current.AutoDockControlStepSeconds, Config.Default.AutoDockControlStepSeconds, 0.0001);
+    public static double AutoDockLinearProportionalGain => GetFiniteDouble(Config.Current.AutoDockLinearProportionalGain, Config.Default.AutoDockLinearProportionalGain, 0.0);
+    public static double AutoDockLinearIntegralGain => GetFiniteDouble(Config.Current.AutoDockLinearIntegralGain, Config.Default.AutoDockLinearIntegralGain, 0.0);
+    public static double AutoDockLinearDerivativeGain => GetFiniteDouble(Config.Current.AutoDockLinearDerivativeGain, Config.Default.AutoDockLinearDerivativeGain, 0.0);
+    public static double AutoDockLinearIntegralLimit => GetFiniteDouble(Config.Current.AutoDockLinearIntegralLimit, Config.Default.AutoDockLinearIntegralLimit, 0.0);
+    public static double AutoDockLinearIntegralActivationDistance => GetFiniteDouble(Config.Current.AutoDockLinearIntegralActivationDistance, Config.Default.AutoDockLinearIntegralActivationDistance, 0.0);
+    public static double AutoDockLinearBrakePadding => GetFiniteDouble(Config.Current.AutoDockLinearBrakePadding, Config.Default.AutoDockLinearBrakePadding, 0.0);
+    public static double AutoDockMaxLinearAcceleration => GetFiniteDouble(Config.Current.AutoDockMaxLinearAcceleration, Config.Default.AutoDockMaxLinearAcceleration, 0.0001);
+    public static double AutoDockFinalApproachMaxLinearAcceleration => GetFiniteDouble(Config.Current.AutoDockFinalApproachMaxLinearAcceleration, Config.Default.AutoDockFinalApproachMaxLinearAcceleration, 0.0001);
+    public static double AutoDockFinalApproachDistance => GetFiniteDouble(Config.Current.AutoDockFinalApproachDistance, Config.Default.AutoDockFinalApproachDistance, 0.0001);
+    public static double AutoDockFinalApproachEntryDistanceTolerance => GetFiniteDouble(Config.Current.AutoDockFinalApproachEntryDistanceTolerance, Config.Default.AutoDockFinalApproachEntryDistanceTolerance, 0.0);
+    public static double AutoDockFinalApproachPlanarTolerance => GetFiniteDouble(Config.Current.AutoDockFinalApproachPlanarTolerance, Config.Default.AutoDockFinalApproachPlanarTolerance, 0.0);
+    public static double AutoDockFinalApproachOrientationThreshold => GetFiniteDouble(Config.Current.AutoDockFinalApproachOrientationThreshold, Config.Default.AutoDockFinalApproachOrientationThreshold, 0.0);
+    public static double AutoDockAngularProportionalGain => GetFiniteDouble(Config.Current.AutoDockAngularProportionalGain, Config.Default.AutoDockAngularProportionalGain, 0.0);
+    public static double AutoDockAngularIntegralGain => GetFiniteDouble(Config.Current.AutoDockAngularIntegralGain, Config.Default.AutoDockAngularIntegralGain, 0.0);
+    public static double AutoDockAngularIntegralLimit => GetFiniteDouble(Config.Current.AutoDockAngularIntegralLimit, Config.Default.AutoDockAngularIntegralLimit, 0.0);
+    public static double AutoDockMaxAngularVelocity => GetFiniteDouble(Config.Current.AutoDockMaxAngularVelocity, Config.Default.AutoDockMaxAngularVelocity, 0.0001);
+    public static double AutoDockAngularVelocityGain => GetFiniteDouble(Config.Current.AutoDockAngularVelocityGain, Config.Default.AutoDockAngularVelocityGain, 0.0001);
+    public static double AutoDockAngularSofteningThreshold => GetFiniteDouble(Config.Current.AutoDockAngularSofteningThreshold, Config.Default.AutoDockAngularSofteningThreshold, 0.0001);
+    public static float AutoDockAngularMinTorque => MathHelper.Clamp(
+        GetFiniteFloat(Config.Current.AutoDockAngularMinTorque, Config.Default.AutoDockAngularMinTorque, 0f),
+        0f,
+        AutoDockAngularMaxTorque);
+    public static float AutoDockAngularMaxTorque => GetFiniteFloat(Config.Current.AutoDockAngularMaxTorque, Config.Default.AutoDockAngularMaxTorque, 0.0001f);
     public const int AutoDockLockDelayFrames = 80;
     public const double ManualInputDeadzone = 0.12;
     public const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
@@ -47,5 +50,24 @@ internal static class AutoDockConstants
             radius = 5f;
 
         return MathHelper.Clamp(radius, MinSearchRadius, MaxSearchRadius);
+    }
+
+    private static int GetPositiveInt(int value, int fallback, int minimum = 1)
+    {
+        return value >= minimum ? value : fallback;
+    }
+
+    private static double GetFiniteDouble(double value, double fallback, double minimum)
+    {
+        return double.IsNaN(value) || double.IsInfinity(value) || value < minimum
+            ? fallback
+            : value;
+    }
+
+    private static float GetFiniteFloat(float value, float fallback, float minimum)
+    {
+        return float.IsNaN(value) || float.IsInfinity(value) || value < minimum
+            ? fallback
+            : value;
     }
 }

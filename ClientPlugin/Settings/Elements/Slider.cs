@@ -34,6 +34,8 @@ internal class SliderAttribute : Attribute, IElement
 
     public List<Control> GetControls(string name, Func<object> propertyGetter, Action<object> propertySetter)
     {
+        object currentValue = propertyGetter();
+        Type propertyType = currentValue?.GetType() ?? typeof(float);
         var valueLabel = new MyGuiControlLabel();
 
         void ValueUpdate(MyGuiControlSlider element)
@@ -47,7 +49,10 @@ internal class SliderAttribute : Attribute, IElement
                     break;
 
                 case SliderType.Float:
-                    propertySetter(element.Value);
+                    if (propertyType == typeof(double))
+                        propertySetter((double)element.Value);
+                    else
+                        propertySetter(element.Value);
                     valueLabel.Text = MyValueFormatter.GetFormatedFloat(element.Value, element.LabelDecimalPlaces);
                     break;
             }
@@ -59,7 +64,7 @@ internal class SliderAttribute : Attribute, IElement
                 Min,
                 Max,
                 MyCommonTexts.DialogAmount_SetValueCaption,
-                defaultAmount: Convert.ToSingle(propertyGetter()),
+                defaultAmount: Convert.ToSingle(currentValue),
                 parseAsInteger: Type == SliderType.Integer,
                 backgroundTransition: MySandboxGame.Config.UIBkOpacity,
                 guiTransition: MySandboxGame.Config.UIOpacity);
@@ -77,7 +82,7 @@ internal class SliderAttribute : Attribute, IElement
 
         var slider = new MyGuiControlSlider(
             toolTip: Description,
-            defaultValue: Convert.ToSingle(propertyGetter()),
+            defaultValue: Convert.ToSingle(currentValue),
             minValue: Min,
             maxValue: Max,
             intValue: Type == SliderType.Integer)
@@ -95,10 +100,12 @@ internal class SliderAttribute : Attribute, IElement
 
         ValueUpdate(slider);
 
-        var label = Tools.Tools.GetLabelOrDefault(name, Label);
+        var label = new MyGuiControlLabel(text: Tools.Tools.GetLabelOrDefault(name, Label));
+        label.SetToolTip(Description);
+        valueLabel.SetToolTip(Description);
         return new List<Control>()
         {
-            new Control(new MyGuiControlLabel(text: label), minWidth: Control.LabelMinWidth),
+            new Control(label, minWidth: Control.LabelMinWidth),
             new Control(slider, fillFactor: 1f, rightMargin: 0.005f),
             new Control(valueLabel, minWidth: 0.06f),
         };
@@ -106,6 +113,7 @@ internal class SliderAttribute : Attribute, IElement
 
     public List<Type> SupportedTypes { get; } = new List<Type>()
     {
+        typeof(double),
         typeof(float),
         typeof(int),
     };
