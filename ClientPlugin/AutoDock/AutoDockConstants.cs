@@ -34,7 +34,7 @@ internal static class AutoDockConstants
     public const double AutoDockAngularSofteningThreshold = 0.35;
     public const float AutoDockAngularMinTorque = 0.35f;
     public const float AutoDockAngularMaxTorque = 0.8f;
-    public const int AutoDockLockDelayFrames = 20;
+    public const int AutoDockLockDelayFrames = 80;
     public const double ManualInputDeadzone = 0.12;
     public const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     public const int LockRotationStepCount = 8;

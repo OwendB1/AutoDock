@@ -103,7 +103,8 @@ internal sealed class AutoDockPilot
             ref autoDockOrientationErrorIntegral,
             pair,
             controller,
-            target);
+            target,
+            allowTranslation: !lockReadyAtStart);
 
         if (!lockReadyAtStart)
         {

@@ -196,7 +196,8 @@ internal static class DockingMath
         ref Vector3D orientationErrorIntegral,
         DockingPair pair,
         MyShipController controller,
-        DockingTarget target)
+        DockingTarget target,
+        bool allowTranslation = true)
     {
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
@@ -236,7 +237,9 @@ internal static class DockingMath
             maxLinearAcceleration,
             target.FinalApproachActive);
         desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
-        Vector3 moveIndicator = CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix, maxLinearAcceleration);
+        Vector3 moveIndicator = allowTranslation
+            ? CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix, maxLinearAcceleration)
+            : Vector3.Zero;
 
         orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
         orientationErrorIntegral = ClampVectorMagnitude(orientationErrorIntegral, AutoDockConstants.AutoDockAngularIntegralLimit);
