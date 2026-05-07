@@ -93,12 +93,9 @@ internal sealed class AutoDockPilot
 
         autoDockFinalApproachStarted = finalApproachStarted;
 
-        if (!DockingMath.TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
+        if (!DockingMath.TryGetControlledShipController(pair.Local.CubeGrid, out MyShipController controller))
         {
-            if (lockReadyAtStart)
-                return AutoDockPilotUpdateResult.Running;
-
-            return Cancel("AutoDock: no active ship controller on selected grid.", "Red");
+            return Cancel("AutoDock: controlled ship controller required on selected grid.", "Red");
         }
 
         DockingMath.ApplyAutoDockControl(

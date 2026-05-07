@@ -2,6 +2,7 @@
 using System.Runtime.CompilerServices;
 using ClientPlugin.Settings;
 using ClientPlugin.Settings.Layouts;
+using HarmonyLib;
 using Sandbox.Graphics.GUI;
 using VRage.Plugins;
 using VRage.Utils;
@@ -19,6 +20,7 @@ public class Plugin : IPlugin
 {
     public const string Name = "AutoDock";
     public static Plugin Instance { get; private set; }
+    private Harmony harmony;
     private SettingsGenerator settingsGenerator;
     private AutoDockController autoDockController;
     private bool updateFailureLogged;
@@ -38,6 +40,10 @@ public class Plugin : IPlugin
             MyLog.Default.WriteLineAndConsole($"{Name}: Creating AutoDock controller.");
             Instance.autoDockController = new AutoDockController();
 
+            MyLog.Default.WriteLineAndConsole($"{Name}: Applying Harmony patches.");
+            Instance.harmony = new Harmony("AutoDock");
+            Instance.harmony.PatchAll();
+
             MyLog.Default.WriteLineAndConsole($"{Name}: Init completed.");
         }
         catch (Exception exception)
@@ -50,8 +56,11 @@ public class Plugin : IPlugin
     public void Dispose()
     {
         MyLog.Default.WriteLineAndConsole($"{Name}: Dispose.");
+        AutoDockControlOverride.Clear();
+        harmony?.UnpatchAll("AutoDock");
         autoDockController?.Dispose();
 
+        harmony = null;
         autoDockController = null;
         Instance = null;
     }

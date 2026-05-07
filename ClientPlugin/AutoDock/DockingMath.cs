@@ -1,7 +1,6 @@
 using System;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
-using Sandbox.Game.GameSystems;
 using Sandbox.Game.World;
 using Sandbox.ModAPI.Ingame;
 using VRage.Input;
@@ -102,8 +101,7 @@ internal static class DockingMath
 
     public static bool TryGetActiveShipController(MyCubeGrid grid, out MyShipController controller)
     {
-        controller = MySession.Static?.ControlledEntity?.Entity as MyShipController;
-        if (controller != null && controller.CubeGrid == grid && !controller.MarkedForClose && controller.IsWorking)
+        if (TryGetControlledShipController(grid, out controller))
             return true;
 
         controller = null;
@@ -117,6 +115,15 @@ internal static class DockingMath
         }
 
         return false;
+    }
+
+    public static bool TryGetControlledShipController(MyCubeGrid grid, out MyShipController controller)
+    {
+        controller = MySession.Static?.ControlledEntity?.Entity as MyShipController;
+        return controller != null
+               && controller.CubeGrid == grid
+               && !controller.MarkedForClose
+               && controller.IsWorking;
     }
 
     public static bool TryCreateDockingTarget(
@@ -157,7 +164,8 @@ internal static class DockingMath
     public static bool TryGetGravityTiltWarning(DockingPair pair, LockRotationService lockRotationService, out string warning)
     {
         warning = null;
-        if (!TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
+        if (!TryGetControlledShipController(pair.Local.CubeGrid, out MyShipController controller)
+            && !TryGetActiveShipController(pair.Local.CubeGrid, out controller))
             return false;
 
         Vector3D gravity = controller.GetNaturalGravity();
@@ -196,8 +204,7 @@ internal static class DockingMath
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
         Vector3D targetVelocity = pair.Target.CubeGrid.Physics.LinearVelocity;
         Vector3D currentVelocity = pair.Local.CubeGrid.Physics.LinearVelocity;
-        MyEntityThrustComponent thrustComponent = controller.EntityThrustComponent;
-        MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
+        MatrixD inverseControllerMatrix = controller.PositionComp.WorldMatrixNormalizedInv;
 
         Vector3D positionError = target.ConstraintPosition - currentConstraintPosition;
         Vector3D errorVelocity = targetVelocity - currentVelocity;
@@ -229,12 +236,7 @@ internal static class DockingMath
             maxLinearAcceleration,
             target.FinalApproachActive);
         desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
-        Vector3D desiredLocalAccelerationD = Vector3D.TransformNormal(desiredWorldAcceleration, inverseGridMatrix);
-        Vector3 localThrustCommand = new Vector3(
-            (float)(desiredLocalAccelerationD.X / maxLinearAcceleration),
-            (float)(desiredLocalAccelerationD.Y / maxLinearAcceleration),
-            (float)(desiredLocalAccelerationD.Z / maxLinearAcceleration));
-        localThrustCommand = Vector3.Clamp(localThrustCommand, -Vector3.One, Vector3.One);
+        Vector3 moveIndicator = CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix, maxLinearAcceleration);
 
         orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
         orientationErrorIntegral = ClampVectorMagnitude(orientationErrorIntegral, AutoDockConstants.AutoDockAngularIntegralLimit);
@@ -246,55 +248,31 @@ internal static class DockingMath
         desiredAngularVelocity = ClampVectorMagnitude(desiredAngularVelocity, AutoDockConstants.AutoDockMaxAngularVelocity);
 
         Vector3D worldTorque = (desiredAngularVelocity - angularVelocity) * AutoDockConstants.AutoDockAngularVelocityGain;
-        Vector3D localTorqueD = Vector3D.TransformNormal(worldTorque, inverseGridMatrix);
-        Vector3 localTorque = new Vector3((float)localTorqueD.X, (float)localTorqueD.Y, (float)localTorqueD.Z);
         float torqueLimit = MathHelper.Lerp(
             AutoDockConstants.AutoDockAngularMinTorque,
             AutoDockConstants.AutoDockAngularMaxTorque,
             MathHelper.Clamp((float)(orientationError.Length() / AutoDockConstants.AutoDockAngularSofteningThreshold), 0f, 1f));
-        localTorque = Vector3.ClampToSphere(localTorque, torqueLimit);
+        CreateRotationInput(
+            worldTorque,
+            inverseControllerMatrix,
+            torqueLimit,
+            out Vector2 rotationIndicator,
+            out float rollIndicator);
 
-        if (thrustComponent != null)
-        {
-            thrustComponent.Enabled = true;
-            thrustComponent.AutopilotEnabled = true;
-            thrustComponent.AutoPilotControlThrust = localThrustCommand;
-            thrustComponent.MarkDirty();
-        }
-
-        if (gyroSystem != null)
-        {
-            gyroSystem.AutopilotEnabled = true;
-            gyroSystem.ControlTorque = localTorque;
-            gyroSystem.MarkDirty();
-        }
+        AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator);
     }
 
     public static void ReleaseShipControl(MyCubeGrid grid)
     {
+        AutoDockControlOverride.Clear();
+
         if (grid == null)
             return;
 
         if (TryGetActiveShipController(grid, out MyShipController controller))
         {
+            controller.MoveAndRotate(Vector3.Zero, Vector2.Zero, 0f);
             controller.MoveAndRotateStopped();
-        }
-
-        MyEntityThrustComponent thrustComponent = grid.Components?.Get<MyEntityThrustComponent>();
-        if (thrustComponent != null)
-        {
-            thrustComponent.AutoPilotControlThrust = Vector3.Zero;
-            thrustComponent.AutopilotEnabled = false;
-            thrustComponent.Enabled = true;
-            thrustComponent.MarkDirty();
-        }
-
-        MyGridGyroSystem gyroSystem = grid.GridSystems?.GyroSystem;
-        if (gyroSystem != null)
-        {
-            gyroSystem.ControlTorque = Vector3.Zero;
-            gyroSystem.AutopilotEnabled = false;
-            gyroSystem.MarkDirty();
         }
     }
 
@@ -540,8 +518,8 @@ internal static class DockingMath
         currentGridMatrix.Translation = Vector3D.Zero;
         MatrixD inverseGridMatrix = MatrixD.Invert(currentGridMatrix);
 
-        localReferenceForward = Vector3D.TransformNormal(GetReferenceControllerForward(grid), inverseGridMatrix);
-        localReferenceUp = Vector3D.TransformNormal(GetReferenceControllerUp(grid), inverseGridMatrix);
+        localReferenceForward = Vector3D.TransformNormal(GetReferenceAlignmentForward(grid), inverseGridMatrix);
+        localReferenceUp = Vector3D.TransformNormal(GetReferenceAlignmentUp(grid), inverseGridMatrix);
         if (localReferenceForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared
             || localReferenceUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
@@ -558,23 +536,23 @@ internal static class DockingMath
                && pair.Target != null
                && TryProjectTargetFaceDirection(
                    pair.Target,
-                   GetReferenceControllerForward(pair.Local.CubeGrid),
-                   GetReferenceControllerUp(pair.Local.CubeGrid),
+                   GetReferenceAlignmentForward(pair.Local.CubeGrid),
+                   GetReferenceAlignmentUp(pair.Local.CubeGrid),
                    out _,
                    out direction,
                    out _);
     }
 
-    private static Vector3D GetReferenceControllerUp(MyCubeGrid grid)
+    private static Vector3D GetReferenceAlignmentUp(MyCubeGrid grid)
     {
-        return TryGetActiveShipController(grid, out MyShipController controller)
+        return TryGetControlledShipController(grid, out MyShipController controller)
             ? controller.WorldMatrix.Up
             : grid.WorldMatrix.Up;
     }
 
-    private static Vector3D GetReferenceControllerForward(MyCubeGrid grid)
+    private static Vector3D GetReferenceAlignmentForward(MyCubeGrid grid)
     {
-        return TryGetActiveShipController(grid, out MyShipController controller)
+        return TryGetControlledShipController(grid, out MyShipController controller)
             ? controller.WorldMatrix.Forward
             : grid.WorldMatrix.Forward;
     }
@@ -750,6 +728,40 @@ internal static class DockingMath
 
         approachAxis.Normalize();
         return true;
+    }
+
+    private static Vector3 CreateMoveIndicator(
+        Vector3D desiredWorldAcceleration,
+        MatrixD inverseControllerMatrix,
+        double maxLinearAcceleration)
+    {
+        if (maxLinearAcceleration <= 0.0)
+            return Vector3.Zero;
+
+        Vector3D desiredControllerAcceleration = Vector3D.TransformNormal(desiredWorldAcceleration, inverseControllerMatrix);
+        Vector3 moveIndicator = new Vector3(
+            (float)(desiredControllerAcceleration.X / maxLinearAcceleration),
+            (float)(desiredControllerAcceleration.Y / maxLinearAcceleration),
+            (float)(desiredControllerAcceleration.Z / maxLinearAcceleration));
+        return Vector3.Clamp(moveIndicator, -Vector3.One, Vector3.One);
+    }
+
+    private static void CreateRotationInput(
+        Vector3D desiredWorldTorque,
+        MatrixD inverseControllerMatrix,
+        float torqueLimit,
+        out Vector2 rotationIndicator,
+        out float rollIndicator)
+    {
+        Vector3D desiredControllerTorqueD = Vector3D.TransformNormal(desiredWorldTorque, inverseControllerMatrix);
+        Vector3 desiredControllerTorque = new Vector3(
+            (float)desiredControllerTorqueD.X,
+            (float)desiredControllerTorqueD.Y,
+            (float)desiredControllerTorqueD.Z);
+        desiredControllerTorque = Vector3.ClampToSphere(desiredControllerTorque, torqueLimit);
+
+        rotationIndicator = new Vector2(-desiredControllerTorque.X * 20f, -desiredControllerTorque.Y * 20f);
+        rollIndicator = -desiredControllerTorque.Z * 5f;
     }
 
     private static Vector3D GetOrientationErrorVector(MatrixD currentMatrix, MatrixD targetMatrix)

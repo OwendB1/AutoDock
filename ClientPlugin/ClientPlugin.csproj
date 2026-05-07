@@ -67,6 +67,10 @@
       <HintPath>$(Bin64Dir)EOSSDK.dll</HintPath>
       <Private>False</Private>
     </Reference>
+    <Reference Include="0Harmony">
+      <HintPath>$(Bin64Dir)..$(PathSeparator)Pulsar$(PathSeparator)Libraries$(PathSeparator)Modern$(PathSeparator)0Harmony.dll</HintPath>
+      <Private>False</Private>
+    </Reference>
     <Reference Include="HavokWrapper, Version=0.1.1.0, Culture=neutral, PublicKeyToken=null">
       <HintPath>$(Bin64Dir)HavokWrapper.dll</HintPath>
       <Private>False</Private>

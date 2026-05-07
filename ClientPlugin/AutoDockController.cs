@@ -26,6 +26,8 @@ internal sealed class AutoDockController
 
     public void Update()
     {
+        AutoDockControlOverride.BeginFrame();
+
         if (MySession.Static == null)
         {
             ResetSessionState();
@@ -157,6 +159,12 @@ internal sealed class AutoDockController
 
         if (pair.LockReady)
         {
+            if (!DockingMath.TryGetControlledShipController(pair.Local.CubeGrid, out _))
+            {
+                Notify("AutoDock: take control of a ship controller on selected grid first.", "Red");
+                return;
+            }
+
             StartAutoDock(pair, "AutoDock: delaying connector lock to close final gap.");
             return;
         }
@@ -164,6 +172,12 @@ internal sealed class AutoDockController
         if (DockingMath.TryGetGravityTiltWarning(pair, lockRotationService, out string warning))
         {
             Notify(warning, "Red");
+            return;
+        }
+
+        if (!DockingMath.TryGetControlledShipController(pair.Local.CubeGrid, out _))
+        {
+            Notify("AutoDock: take control of a ship controller on selected grid first.", "Red");
             return;
         }
 
