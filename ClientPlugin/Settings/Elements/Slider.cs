@@ -9,6 +9,9 @@ namespace ClientPlugin.Settings.Elements;
 
 internal class SliderAttribute : Attribute, IElement
 {
+    private static readonly FieldInfo CanHideOthersField = typeof(MyGuiScreenBase)
+        .GetField("m_canHideOthers", BindingFlags.NonPublic | BindingFlags.Instance);
+
     public enum SliderType
     {
         Integer,
@@ -60,21 +63,21 @@ internal class SliderAttribute : Attribute, IElement
 
         bool SpecifyValue(MyGuiControlSlider element)
         {
+            object dialogValue = propertyGetter() ?? currentValue;
+            var config = MySandboxGame.Config;
             MyGuiScreenDialogAmount screen = new MyGuiScreenDialogAmount(
                 Min,
                 Max,
                 MyCommonTexts.DialogAmount_SetValueCaption,
-                defaultAmount: Convert.ToSingle(currentValue),
+                defaultAmount: Convert.ToSingle(dialogValue),
                 parseAsInteger: Type == SliderType.Integer,
-                backgroundTransition: MySandboxGame.Config.UIBkOpacity,
-                guiTransition: MySandboxGame.Config.UIOpacity);
+                backgroundTransition: config?.UIBkOpacity ?? 0f,
+                guiTransition: config?.UIOpacity ?? 0f);
 
             screen.OnConfirmed += (value) => element.Value = value;
 
             // Much needed visual change requires reflection due to private types
-            typeof(MyGuiScreenBase)
-                .GetField("m_canHideOthers", BindingFlags.NonPublic | BindingFlags.Instance)
-                .SetValue(screen, true);
+            CanHideOthersField?.SetValue(screen, true);
 
             MyGuiSandbox.AddScreen(screen);
             return true;
