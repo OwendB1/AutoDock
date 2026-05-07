@@ -13,23 +13,20 @@ internal sealed class AutoDockInput
     private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
     private static readonly MyStringId PreviousConnectorControlId = MyStringId.GetOrCompute("AutoDock.PreviousConnectorKeybind");
     private static readonly MyStringId NextConnectorControlId = MyStringId.GetOrCompute("AutoDock.NextConnectorKeybind");
-    private static readonly MyStringId SaveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.SaveAlignmentKeybind");
-    private static readonly MyStringId RemoveAlignmentControlId = MyStringId.GetOrCompute("AutoDock.RemoveAlignmentKeybind");
+    private static readonly MyStringId RotateAlignmentControlId = MyStringId.GetOrCompute("AutoDock.RotateAlignmentKeybind");
 
     private Binding registeredActivationKeybind = new Binding(MyKeys.None);
     private Binding registeredPreviousPairKeybind = new Binding(MyKeys.None);
     private Binding registeredNextPairKeybind = new Binding(MyKeys.None);
     private Binding registeredPreviousConnectorKeybind = new Binding(MyKeys.None);
     private Binding registeredNextConnectorKeybind = new Binding(MyKeys.None);
-    private Binding registeredSaveAlignmentKeybind = new Binding(MyKeys.None);
-    private Binding registeredRemoveAlignmentKeybind = new Binding(MyKeys.None);
+    private Binding registeredRotateAlignmentKeybind = new Binding(MyKeys.None);
     private MyControl activationControl;
     private MyControl previousPairControl;
     private MyControl nextPairControl;
     private MyControl previousConnectorControl;
     private MyControl nextConnectorControl;
-    private MyControl saveAlignmentControl;
-    private MyControl removeAlignmentControl;
+    private MyControl rotateAlignmentControl;
 
     public void EnsureRegistered(IMyInput input)
     {
@@ -71,18 +68,11 @@ internal sealed class AutoDockInput
             ref nextConnectorControl);
         changed |= EnsureGameControl(
             input,
-            SaveAlignmentControlId,
-            "AutoDock Save Alignment",
-            Config.Current.SaveAlignmentKeybind,
-            ref registeredSaveAlignmentKeybind,
-            ref saveAlignmentControl);
-        changed |= EnsureGameControl(
-            input,
-            RemoveAlignmentControlId,
-            "AutoDock Remove Alignment",
-            Config.Current.RemoveAlignmentKeybind,
-            ref registeredRemoveAlignmentKeybind,
-            ref removeAlignmentControl);
+            RotateAlignmentControlId,
+            "AutoDock Rotate Alignment",
+            Config.Current.RotateAlignmentKeybind,
+            ref registeredRotateAlignmentKeybind,
+            ref rotateAlignmentControl);
 
         if (changed)
             input.CreateKeyControlsPriorityMap();
@@ -101,8 +91,7 @@ internal sealed class AutoDockInput
         changed |= EnsureGameControl(input, NextPairControlId, "AutoDock Next Pair", unbound, ref registeredNextPairKeybind, ref nextPairControl);
         changed |= EnsureGameControl(input, PreviousConnectorControlId, "AutoDock Previous Connector", unbound, ref registeredPreviousConnectorKeybind, ref previousConnectorControl);
         changed |= EnsureGameControl(input, NextConnectorControlId, "AutoDock Next Connector", unbound, ref registeredNextConnectorKeybind, ref nextConnectorControl);
-        changed |= EnsureGameControl(input, SaveAlignmentControlId, "AutoDock Save Alignment", unbound, ref registeredSaveAlignmentKeybind, ref saveAlignmentControl);
-        changed |= EnsureGameControl(input, RemoveAlignmentControlId, "AutoDock Remove Alignment", unbound, ref registeredRemoveAlignmentKeybind, ref removeAlignmentControl);
+        changed |= EnsureGameControl(input, RotateAlignmentControlId, "AutoDock Rotate Alignment", unbound, ref registeredRotateAlignmentKeybind, ref rotateAlignmentControl);
 
         if (changed)
             input.CreateKeyControlsPriorityMap();
@@ -133,14 +122,9 @@ internal sealed class AutoDockInput
         return IsControlNewPressed(nextConnectorControl, Config.Current.NextConnectorKeybind, input);
     }
 
-    public bool IsSaveAlignmentPressed(IMyInput input)
+    public bool IsRotateAlignmentPressed(IMyInput input)
     {
-        return IsControlNewPressed(saveAlignmentControl, Config.Current.SaveAlignmentKeybind, input);
-    }
-
-    public bool IsRemoveAlignmentPressed(IMyInput input)
-    {
-        return IsControlNewPressed(removeAlignmentControl, Config.Current.RemoveAlignmentKeybind, input);
+        return IsControlNewPressed(rotateAlignmentControl, Config.Current.RotateAlignmentKeybind, input);
     }
 
     private static bool EnsureGameControl(

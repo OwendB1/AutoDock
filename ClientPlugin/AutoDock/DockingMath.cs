@@ -120,14 +120,14 @@ internal static class DockingMath
         return false;
     }
 
-    public static bool TryCreateDockingTarget(DockingPair pair, SavedAlignmentService savedAlignmentService, out DockingTarget target)
+    public static bool TryCreateDockingTarget(DockingPair pair, LockRotationService lockRotationService, out DockingTarget target)
     {
         target = null;
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
         Vector3D targetConstraintPosition = pair.Target.ConstraintPositionWorld();
-        if (!TryCreateDockingWorldMatrix(pair, savedAlignmentService, targetConstraintPosition, out MatrixD targetMatrix))
+        if (!TryCreateDockingWorldMatrix(pair, lockRotationService, targetConstraintPosition, out MatrixD targetMatrix))
             return false;
 
         bool positionReady = Vector3D.DistanceSquared(currentConstraintPosition, targetConstraintPosition)
@@ -138,7 +138,7 @@ internal static class DockingMath
         return true;
     }
 
-    public static bool TryGetGravityTiltWarning(DockingPair pair, SavedAlignmentService savedAlignmentService, out string warning)
+    public static bool TryGetGravityTiltWarning(DockingPair pair, LockRotationService lockRotationService, out string warning)
     {
         warning = null;
         if (!TryGetActiveShipController(pair.Local.CubeGrid, out MyShipController controller))
@@ -148,7 +148,7 @@ internal static class DockingMath
         if (gravity.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
-        if (!TryGetGridRotationTarget(pair, savedAlignmentService, out MatrixD targetOrientation))
+        if (!TryGetGridRotationTarget(pair, lockRotationService, out MatrixD targetOrientation))
             return false;
 
         MatrixD desiredControllerMatrix = GetDesiredControllerWorldMatrix(controller, targetOrientation);
@@ -279,9 +279,142 @@ internal static class DockingMath
         return distance <= AutoDockConstants.GetSearchRadius();
     }
 
+    public static Vector3D GetConnectorReferencePosition(MyShipConnector connector)
+    {
+        if (connector == null)
+            return Vector3D.Zero;
+
+        return connector.CubeGrid != null && !connector.CubeGrid.MarkedForClose
+            ? connector.ConstraintPositionWorld()
+            : connector.PositionComp.GetPosition();
+    }
+
+    public static int NormalizeRotationStep(int rotationStep)
+    {
+        rotationStep %= AutoDockConstants.LockRotationStepCount;
+        if (rotationStep < 0)
+            rotationStep += AutoDockConstants.LockRotationStepCount;
+
+        return rotationStep;
+    }
+
+    public static int GetRotationAngleDegrees(int rotationStep)
+    {
+        return NormalizeRotationStep(rotationStep) * 360 / AutoDockConstants.LockRotationStepCount;
+    }
+
+    public static bool TryGetOrientationAngleDegrees(DockingPair pair, int rotationStep, out int angleDegrees)
+    {
+        angleDegrees = 0;
+        if (!TryGetDesiredOrientationIndicator(pair, rotationStep, out Vector3D faceNormal, out Vector3D direction, out _))
+            return false;
+
+        Vector3D baseDirection = RejectFromAxis(pair.Target.WorldMatrix.Up, faceNormal);
+        if (baseDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseDirection = RejectFromAxis(pair.Target.WorldMatrix.Right, faceNormal);
+        if (baseDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        baseDirection.Normalize();
+        double angleRadians = SignedAngleAroundAxis(baseDirection, direction, faceNormal);
+        if (angleRadians < 0.0)
+            angleRadians += Math.PI * 2.0;
+
+        angleDegrees = (int)Math.Round(MathHelper.ToDegrees((float)angleRadians));
+        if (angleDegrees >= 360)
+            angleDegrees -= 360;
+        return true;
+    }
+
+    public static int GetDefaultRotationStep(DockingPair pair)
+    {
+        if (!TryGetCurrentOrientationIndicator(pair, out Vector3D currentDirection))
+            return 0;
+
+        int bestRotationStep = 0;
+        double bestAlignment = double.NegativeInfinity;
+        bool found = false;
+        for (int rotationStep = 0; rotationStep < AutoDockConstants.LockRotationStepCount; rotationStep++)
+        {
+            if (!TryGetDesiredOrientationIndicator(pair, rotationStep, out _, out Vector3D desiredDirection, out _))
+                continue;
+
+            double alignment = Vector3D.Dot(currentDirection, desiredDirection);
+            if (!found || alignment > bestAlignment)
+            {
+                bestAlignment = alignment;
+                bestRotationStep = rotationStep;
+                found = true;
+            }
+        }
+
+        return found ? bestRotationStep : 0;
+    }
+
+    public static bool TryCreateDesiredLocalConnectorWorldMatrix(
+        MyShipConnector targetConnector,
+        int rotationStep,
+        out MatrixD desiredLocalConnectorWorldMatrix)
+    {
+        desiredLocalConnectorWorldMatrix = MatrixD.Identity;
+        if (!TryGetRotationBasis(targetConnector, out Vector3D desiredForward, out Vector3D baseUp))
+            return false;
+
+        QuaternionD rollRotation = QuaternionD.CreateFromAxisAngle(
+            desiredForward,
+            NormalizeRotationStep(rotationStep) * AutoDockConstants.LockRotationStepRadians);
+        Vector3D desiredUp = RejectFromAxis(rollRotation * baseUp, desiredForward);
+        if (desiredUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        desiredUp.Normalize();
+        desiredLocalConnectorWorldMatrix = MatrixD.CreateWorld(Vector3D.Zero, desiredForward, desiredUp);
+        desiredLocalConnectorWorldMatrix.Translation = Vector3D.Zero;
+        return desiredLocalConnectorWorldMatrix.IsValid();
+    }
+
+    public static bool TryGetActualRotationStep(MyShipConnector localConnector, MyShipConnector targetConnector, out int rotationStep)
+    {
+        rotationStep = 0;
+        if (localConnector == null || targetConnector == null)
+            return false;
+
+        return TryQuantizeRotationStep(targetConnector, localConnector.WorldMatrix.Up, out rotationStep);
+    }
+
+    public static bool TryGetDesiredOrientationIndicator(
+        DockingPair pair,
+        int rotationStep,
+        out Vector3D faceNormal,
+        out Vector3D direction,
+        out Vector3D right)
+    {
+        faceNormal = Vector3D.Zero;
+        direction = Vector3D.Zero;
+        right = Vector3D.Zero;
+        if (pair?.Local == null || pair.Target == null || pair.Local.CubeGrid == null)
+            return false;
+
+        if (!TryCreateGridRotationTarget(pair, rotationStep, out MatrixD targetOrientation))
+            return false;
+
+        if (!TryGetReferenceControllerAxesLocal(pair.Local.CubeGrid, out Vector3D localReferenceForward, out Vector3D localReferenceUp))
+            return false;
+
+        Vector3D desiredReferenceForward = Vector3D.TransformNormal(localReferenceForward, targetOrientation);
+        Vector3D desiredReferenceUp = Vector3D.TransformNormal(localReferenceUp, targetOrientation);
+        return TryProjectTargetFaceDirection(
+            pair.Target,
+            desiredReferenceForward,
+            desiredReferenceUp,
+            out faceNormal,
+            out direction,
+            out right);
+    }
+
     private static bool TryCreateDockingWorldMatrix(
         DockingPair pair,
-        SavedAlignmentService savedAlignmentService,
+        LockRotationService lockRotationService,
         Vector3D desiredConstraintPosition,
         out MatrixD targetMatrix)
     {
@@ -289,7 +422,7 @@ internal static class DockingMath
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
 
-        if (!TryGetGridRotationTarget(pair, savedAlignmentService, out MatrixD targetOrientation))
+        if (!TryGetGridRotationTarget(pair, lockRotationService, out MatrixD targetOrientation))
             return false;
 
         Vector3D localConstraintPosition = Vector3D.Transform(pair.Local.ConstraintPositionWorld(), MatrixD.Invert(currentGridMatrix));
@@ -300,28 +433,47 @@ internal static class DockingMath
         return targetMatrix.IsValid();
     }
 
-    private static bool TryGetGridRotationTarget(DockingPair pair, SavedAlignmentService savedAlignmentService, out MatrixD targetOrientation)
+    private static bool TryGetGridRotationTarget(DockingPair pair, LockRotationService lockRotationService, out MatrixD targetOrientation)
     {
-        if (TryGetSavedGridRotationTarget(pair, savedAlignmentService, out targetOrientation))
-            return true;
-
-        return TryGetDefaultGridRotationTarget(pair, out targetOrientation);
+        return TryCreateGridRotationTarget(pair, lockRotationService.GetRotationStep(pair), out targetOrientation);
     }
 
-    private static bool TryGetSavedGridRotationTarget(
+    private static bool TryCreateGridRotationTarget(
         DockingPair pair,
-        SavedAlignmentService savedAlignmentService,
+        int rotationStep,
         out MatrixD targetOrientation)
     {
         targetOrientation = MatrixD.Identity;
-        if (!savedAlignmentService.TryGetSavedConnectorAlignmentMatrix(pair, out MatrixD relativeConnectorMatrix))
+        if (!TryCreateDesiredLocalConnectorWorldMatrix(pair.Target, rotationStep, out MatrixD desiredLocalConnectorWorldMatrix))
             return false;
 
-        MatrixD targetConnectorWorldMatrix = pair.Target.WorldMatrix;
-        targetConnectorWorldMatrix.Translation = Vector3D.Zero;
+        if (!TryGetLocalConnectorGridMatrix(pair, out MatrixD localConnectorGridMatrix))
+            return false;
 
-        MatrixD desiredLocalConnectorWorldMatrix = relativeConnectorMatrix * targetConnectorWorldMatrix;
+        targetOrientation = MatrixD.Invert(localConnectorGridMatrix) * desiredLocalConnectorWorldMatrix;
+        targetOrientation.Translation = Vector3D.Zero;
+        return targetOrientation.IsValid();
+    }
+
+    private static bool TryGetDesiredLocalConnectorWorldMatrix(
+        DockingPair pair,
+        MatrixD targetOrientation,
+        out MatrixD desiredLocalConnectorWorldMatrix)
+    {
+        desiredLocalConnectorWorldMatrix = MatrixD.Identity;
+        if (!TryGetLocalConnectorGridMatrix(pair, out MatrixD localConnectorGridMatrix))
+            return false;
+
+        desiredLocalConnectorWorldMatrix = localConnectorGridMatrix * targetOrientation;
         desiredLocalConnectorWorldMatrix.Translation = Vector3D.Zero;
+        return desiredLocalConnectorWorldMatrix.IsValid();
+    }
+
+    private static bool TryGetLocalConnectorGridMatrix(DockingPair pair, out MatrixD localConnectorGridMatrix)
+    {
+        localConnectorGridMatrix = MatrixD.Identity;
+        if (pair?.Local == null || pair.Local.CubeGrid == null)
+            return false;
 
         MatrixD currentGridMatrix = pair.Local.CubeGrid.PositionComp.WorldMatrixRef;
         currentGridMatrix.Translation = Vector3D.Zero;
@@ -329,15 +481,52 @@ internal static class DockingMath
 
         MatrixD localConnectorWorldMatrix = pair.Local.WorldMatrix;
         localConnectorWorldMatrix.Translation = Vector3D.Zero;
-        MatrixD localConnectorGridMatrix = localConnectorWorldMatrix * inverseGridMatrix;
-        localConnectorGridMatrix.Translation = Vector3D.Zero;
 
-        targetOrientation = MatrixD.Invert(localConnectorGridMatrix) * desiredLocalConnectorWorldMatrix;
-        targetOrientation.Translation = Vector3D.Zero;
-        return targetOrientation.IsValid();
+        localConnectorGridMatrix = localConnectorWorldMatrix * inverseGridMatrix;
+        localConnectorGridMatrix.Translation = Vector3D.Zero;
+        return localConnectorGridMatrix.IsValid();
     }
 
-    private static bool TryGetDefaultGridRotationTarget(DockingPair pair, out MatrixD targetOrientation)
+    private static bool TryGetReferenceControllerAxesLocal(
+        MyCubeGrid grid,
+        out Vector3D localReferenceForward,
+        out Vector3D localReferenceUp)
+    {
+        localReferenceForward = Vector3D.Zero;
+        localReferenceUp = Vector3D.Zero;
+        if (grid == null || grid.MarkedForClose)
+            return false;
+
+        MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
+        currentGridMatrix.Translation = Vector3D.Zero;
+        MatrixD inverseGridMatrix = MatrixD.Invert(currentGridMatrix);
+
+        localReferenceForward = Vector3D.TransformNormal(GetReferenceControllerForward(grid), inverseGridMatrix);
+        localReferenceUp = Vector3D.TransformNormal(GetReferenceControllerUp(grid), inverseGridMatrix);
+        if (localReferenceForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared
+            || localReferenceUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        localReferenceForward.Normalize();
+        localReferenceUp.Normalize();
+        return true;
+    }
+
+    private static bool TryGetCurrentOrientationIndicator(DockingPair pair, out Vector3D direction)
+    {
+        direction = Vector3D.Zero;
+        return pair?.Local?.CubeGrid != null
+               && pair.Target != null
+               && TryProjectTargetFaceDirection(
+                   pair.Target,
+                   GetReferenceControllerForward(pair.Local.CubeGrid),
+                   GetReferenceControllerUp(pair.Local.CubeGrid),
+                   out _,
+                   out direction,
+                   out _);
+    }
+
+    private static bool TryGetContinuousGridRotationTarget(DockingPair pair, out MatrixD targetOrientation)
     {
         targetOrientation = MatrixD.Identity;
         MyCubeGrid grid = pair.Local.CubeGrid;
@@ -377,6 +566,7 @@ internal static class DockingMath
         }
 
         targetOrientation = MatrixD.CreateFromQuaternion(combinedRotation);
+        targetOrientation.Translation = Vector3D.Zero;
         return targetOrientation.IsValid();
     }
 
@@ -385,6 +575,13 @@ internal static class DockingMath
         return TryGetActiveShipController(grid, out MyShipController controller)
             ? controller.WorldMatrix.Up
             : grid.WorldMatrix.Up;
+    }
+
+    private static Vector3D GetReferenceControllerForward(MyCubeGrid grid)
+    {
+        return TryGetActiveShipController(grid, out MyShipController controller)
+            ? controller.WorldMatrix.Forward
+            : grid.WorldMatrix.Forward;
     }
 
     private static Vector3D GetGravityVector(MyCubeGrid grid)
@@ -438,6 +635,66 @@ internal static class DockingMath
         return QuaternionD.CreateFromAxisAngle(rotationAxis, Math.Acos(dot));
     }
 
+    private static bool TryGetRotationBasis(MyShipConnector targetConnector, out Vector3D desiredForward, out Vector3D baseUp)
+    {
+        desiredForward = Vector3D.Zero;
+        baseUp = Vector3D.Zero;
+        if (targetConnector == null)
+            return false;
+
+        desiredForward = -targetConnector.WorldMatrix.Forward;
+        if (desiredForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        desiredForward.Normalize();
+        baseUp = RejectFromAxis(targetConnector.WorldMatrix.Up, desiredForward);
+        if (baseUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseUp = RejectFromAxis(targetConnector.WorldMatrix.Right, desiredForward);
+        if (baseUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        baseUp.Normalize();
+        return true;
+    }
+
+    private static bool TryProjectTargetFaceDirection(
+        MyShipConnector targetConnector,
+        Vector3D desiredReferenceForward,
+        Vector3D desiredReferenceUp,
+        out Vector3D faceNormal,
+        out Vector3D direction,
+        out Vector3D right)
+    {
+        faceNormal = Vector3D.Zero;
+        direction = Vector3D.Zero;
+        right = Vector3D.Zero;
+        if (targetConnector == null)
+            return false;
+
+        faceNormal = targetConnector.WorldMatrix.Forward;
+        if (faceNormal.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        faceNormal.Normalize();
+        direction = RejectFromAxis(desiredReferenceForward, faceNormal);
+        if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            direction = RejectFromAxis(desiredReferenceUp, faceNormal);
+        if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            direction = RejectFromAxis(targetConnector.WorldMatrix.Up, faceNormal);
+        if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            direction = RejectFromAxis(targetConnector.WorldMatrix.Right, faceNormal);
+        if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        direction.Normalize();
+        right = Vector3D.Cross(faceNormal, direction);
+        if (right.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        right.Normalize();
+        return true;
+    }
+
     private static Vector3D RejectFromAxis(Vector3D vector, Vector3D axis)
     {
         return vector - axis * Vector3D.Dot(vector, axis);
@@ -449,6 +706,25 @@ internal static class DockingMath
         double sine = Vector3D.Dot(cross, axis);
         double cosine = MathHelper.Clamp(Vector3D.Dot(from, to), -1.0, 1.0);
         return Math.Atan2(sine, cosine);
+    }
+
+    private static bool TryQuantizeRotationStep(MyShipConnector targetConnector, Vector3D localConnectorUp, out int rotationStep)
+    {
+        rotationStep = 0;
+        if (!TryGetRotationBasis(targetConnector, out Vector3D desiredForward, out Vector3D baseUp))
+            return false;
+
+        Vector3D projectedUp = RejectFromAxis(localConnectorUp, desiredForward);
+        if (projectedUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        projectedUp.Normalize();
+        double angle = SignedAngleAroundAxis(baseUp, projectedUp, desiredForward);
+        if (angle < 0.0)
+            angle += Math.PI * 2.0;
+
+        rotationStep = NormalizeRotationStep((int)Math.Floor(angle / AutoDockConstants.LockRotationStepRadians + 0.5));
+        return true;
     }
 
     private static Vector3D GetDesiredWorldAcceleration(

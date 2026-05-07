@@ -7,16 +7,16 @@ internal sealed class DockingPair
 {
     public readonly MyShipConnector Local;
     public readonly MyShipConnector Target;
-    public readonly bool HasSavedAlignment;
+    public readonly bool HasRememberedRotation;
     public double Distance { get; private set; }
     public bool InRange { get; private set; }
     public bool LockReady { get; private set; }
 
-    public DockingPair(MyShipConnector local, MyShipConnector target, double distance, bool lockReady, bool hasSavedAlignment)
+    public DockingPair(MyShipConnector local, MyShipConnector target, double distance, bool lockReady, bool hasRememberedRotation)
     {
         Local = local;
         Target = target;
-        HasSavedAlignment = hasSavedAlignment;
+        HasRememberedRotation = hasRememberedRotation;
         Distance = distance;
         InRange = DockingMath.IsWithinSearchRange(distance);
         LockReady = lockReady;
@@ -30,7 +30,9 @@ internal sealed class DockingPair
             return;
         }
 
-        Distance = Vector3D.Distance(Local.PositionComp.GetPosition(), Target.PositionComp.GetPosition());
+        Distance = Vector3D.Distance(
+            DockingMath.GetConnectorReferencePosition(Local),
+            DockingMath.GetConnectorReferencePosition(Target));
         InRange = DockingMath.IsWithinSearchRange(Distance);
         LockReady = DockingMath.IsLockReady(Local, Target);
     }

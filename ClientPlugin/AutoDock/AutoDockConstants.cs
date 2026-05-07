@@ -38,6 +38,8 @@ internal static class AutoDockConstants
     public const int AutoDockLockDelayFrames = 12;
     public const double ManualInputDeadzone = 0.12;
     public const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
+    public const int LockRotationStepCount = 8;
+    public const double LockRotationStepRadians = Math.PI * 2.0 / LockRotationStepCount;
 
     public static float GetSearchRadius()
     {

@@ -7,7 +7,7 @@ namespace ClientPlugin;
 
 internal sealed class AutoDockPilot
 {
-    private readonly SavedAlignmentService savedAlignmentService;
+    private readonly LockRotationService lockRotationService;
     private DockingPair autoDockingPair;
     private int autoDockFrames;
     private bool autoDockConnectRequested;
@@ -16,9 +16,9 @@ internal sealed class AutoDockPilot
     private Vector3D autoDockPositionErrorIntegral;
     private Vector3D autoDockOrientationErrorIntegral;
 
-    public AutoDockPilot(SavedAlignmentService savedAlignmentService)
+    public AutoDockPilot(LockRotationService lockRotationService)
     {
-        this.savedAlignmentService = savedAlignmentService;
+        this.lockRotationService = lockRotationService;
     }
 
     public bool IsActive => autoDockingPair != null;
@@ -77,7 +77,7 @@ internal sealed class AutoDockPilot
             autoDockLockReadyFrames = 0;
         }
 
-        if (!DockingMath.TryCreateDockingTarget(pair, savedAlignmentService, out DockingTarget target))
+        if (!DockingMath.TryCreateDockingTarget(pair, lockRotationService, out DockingTarget target))
         {
             if (lockReadyAtStart)
                 return AutoDockPilotUpdateResult.Running;

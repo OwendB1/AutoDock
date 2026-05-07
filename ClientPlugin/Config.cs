@@ -19,9 +19,7 @@ public class Config : INotifyPropertyChanged
     private Binding nextPairKeybind = new Binding(MyKeys.Down, ctrl: true);
     private Binding previousConnectorKeybind = new Binding(MyKeys.Up, alt: true);
     private Binding nextConnectorKeybind = new Binding(MyKeys.Down, alt: true);
-    private Binding saveAlignmentKeybind = new Binding(MyKeys.L, ctrl: true);
-    private Binding removeAlignmentKeybind = new Binding(MyKeys.K, ctrl: true);
-    private List<SavedConnectorAlignment> savedAlignments = new List<SavedConnectorAlignment>();
+    private Binding rotateAlignmentKeybind = new Binding(MyKeys.R, ctrl: true);
 
     #endregion
 
@@ -75,24 +73,11 @@ public class Config : INotifyPropertyChanged
         set => SetField(ref nextConnectorKeybind, value);
     }
 
-    [Keybind(label: "Save pair alignment", description: "Save current relative alignment for currently locked connector pair. AutoDock will prefer it for this pair.")]
-    public Binding SaveAlignmentKeybind
+    [Keybind(label: "Cycle lock rotation", description: "Cycle through 8 connector lock rotation steps for selected connector pair while AutoDock preview is active.")]
+    public Binding RotateAlignmentKeybind
     {
-        get => saveAlignmentKeybind;
-        set => SetField(ref saveAlignmentKeybind, value);
-    }
-
-    [Keybind(label: "Remove saved alignment", description: "Remove saved alignment for currently locked connector pair or open saved alignment removal list.")]
-    public Binding RemoveAlignmentKeybind
-    {
-        get => removeAlignmentKeybind;
-        set => SetField(ref removeAlignmentKeybind, value);
-    }
-
-    public List<SavedConnectorAlignment> SavedAlignments
-    {
-        get => savedAlignments ?? (savedAlignments = new List<SavedConnectorAlignment>());
-        set => savedAlignments = value ?? new List<SavedConnectorAlignment>();
+        get => rotateAlignmentKeybind;
+        set => SetField(ref rotateAlignmentKeybind, value);
     }
 
     #endregion

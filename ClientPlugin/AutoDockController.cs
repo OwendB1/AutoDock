@@ -3,32 +3,36 @@ using Sandbox.Game.Gui;
 using Sandbox.Game.World;
 using Sandbox.Graphics.GUI;
 using VRage.Input;
-using VRageMath;
 
 namespace ClientPlugin;
 
 internal sealed class AutoDockController
 {
-    private readonly SavedAlignmentService savedAlignmentService;
+    private readonly LockRotationService lockRotationService;
     private readonly DockingPairCatalog pairCatalog;
     private readonly AutoDockPilot autoDockPilot;
     private readonly AutoDockInput autoDockInput;
 
     private bool active;
     private int framesUntilRescan;
-    private SavedAlignmentRemovalScreen removeAlignmentScreen;
 
     public AutoDockController()
     {
-        savedAlignmentService = new SavedAlignmentService();
-        pairCatalog = new DockingPairCatalog(savedAlignmentService);
-        autoDockPilot = new AutoDockPilot(savedAlignmentService);
+        lockRotationService = new LockRotationService();
+        pairCatalog = new DockingPairCatalog(lockRotationService);
+        autoDockPilot = new AutoDockPilot(lockRotationService);
         autoDockInput = new AutoDockInput();
     }
 
     public void Update()
     {
-        if (MySession.Static == null || MyInput.Static == null)
+        if (MySession.Static == null)
+        {
+            ResetSessionState();
+            return;
+        }
+
+        if (MyInput.Static == null)
         {
             ClearSelection();
             return;
@@ -37,26 +41,15 @@ internal sealed class AutoDockController
         IMyInput input = MyInput.Static;
         autoDockInput.EnsureRegistered(input);
 
-        MyGuiScreenBase screenWithFocus = MyScreenManager.GetScreenWithFocus();
-        if (removeAlignmentScreen != null && screenWithFocus == removeAlignmentScreen)
-            removeAlignmentScreen.HandleExternalInput(input);
+        if (lockRotationService.TryGetLockedPair(out DockingPair lockedPair))
+        {
+            lockRotationService.RememberCurrentRotation(lockedPair);
+            pairCatalog.RememberPreferredConnector(lockedPair.Local);
+        }
 
+        MyGuiScreenBase screenWithFocus = MyScreenManager.GetScreenWithFocus();
         if (screenWithFocus != null && screenWithFocus != MyGuiScreenGamePlay.Static)
         {
-            DrawPairs();
-            return;
-        }
-
-        if (autoDockInput.IsRemoveAlignmentPressed(input))
-        {
-            HandleRemoveAlignmentPressed();
-            DrawPairs();
-            return;
-        }
-
-        if (autoDockInput.IsSaveAlignmentPressed(input))
-        {
-            HandleSaveAlignmentPressed();
             DrawPairs();
             return;
         }
@@ -94,7 +87,11 @@ internal sealed class AutoDockController
             }
         }
 
-        if (autoDockInput.IsCyclePreviousConnectorPressed(input))
+        if (autoDockInput.IsRotateAlignmentPressed(input))
+        {
+            HandleRotateAlignmentPressed();
+        }
+        else if (autoDockInput.IsCyclePreviousConnectorPressed(input))
         {
             if (pairCatalog.CycleConnector(-1))
                 NotifySelection();
@@ -120,9 +117,9 @@ internal sealed class AutoDockController
 
     public void Dispose()
     {
-        removeAlignmentScreen?.CloseScreen();
-        removeAlignmentScreen = null;
         ClearSelection();
+        lockRotationService.ClearRememberedRotations();
+        pairCatalog.ClearRememberedConnectorSelection();
         autoDockInput.Unregister();
     }
 
@@ -164,7 +161,7 @@ internal sealed class AutoDockController
             return;
         }
 
-        if (DockingMath.TryGetGravityTiltWarning(pair, savedAlignmentService, out string warning))
+        if (DockingMath.TryGetGravityTiltWarning(pair, lockRotationService, out string warning))
         {
             Notify(warning, "Red");
             return;
@@ -198,81 +195,19 @@ internal sealed class AutoDockController
         }
     }
 
-    private void HandleSaveAlignmentPressed()
+    private void HandleRotateAlignmentPressed()
     {
-        if (!savedAlignmentService.TryGetLockedPair(out DockingPair pair))
+        if (!pairCatalog.TryGetSelectedPair(out DockingPair pair))
         {
-            Notify("AutoDock: connectors must be locked before saving alignment.", "Red");
             return;
         }
 
-        if (!savedAlignmentService.TryBuildRelativeConnectorAlignment(pair.Local, pair.Target, out MatrixD relativeConnectorMatrix))
-        {
-            Notify("AutoDock: cannot save connector alignment right now.", "Red");
-            return;
-        }
-
-        savedAlignmentService.SaveAlignment(pair, relativeConnectorMatrix);
-        HandleAlignmentChanged();
-        Notify("AutoDock: saved connector alignment for current pair.", "Green");
+        lockRotationService.CycleRotationStep(pair, 1);
+        HandleRotationChanged();
+        NotifySelection();
     }
 
-    private void HandleRemoveAlignmentPressed()
-    {
-        if (savedAlignmentService.TryGetLockedPair(out DockingPair pair)
-            && savedAlignmentService.TryGetSavedAlignment(pair.Local.EntityId, pair.Target.EntityId, out SavedConnectorAlignment savedAlignment, out _))
-        {
-            RemoveSavedAlignment(
-                savedAlignment,
-                $"AutoDock: removed saved alignment for {savedAlignment.GetDisplayName(savedAlignmentService.GetGridDisplayName(pair.Local.CubeGrid))}.");
-            return;
-        }
-
-        OpenRemoveAlignmentScreen();
-    }
-
-    private void OpenRemoveAlignmentScreen()
-    {
-        if (removeAlignmentScreen != null)
-            return;
-
-        var savedAlignments = savedAlignmentService.SavedAlignments;
-        if (savedAlignments.Count == 0)
-        {
-            Notify("AutoDock: no saved alignments to remove.", "Red");
-            return;
-        }
-
-        string currentGridName = savedAlignmentService.GetGridDisplayName(MySession.Static?.ControlledGrid);
-        var screen = new SavedAlignmentRemovalScreen(savedAlignments, currentGridName, HandlePopupAlignmentRemoval);
-        screen.Closed += (_, _) =>
-        {
-            if (ReferenceEquals(removeAlignmentScreen, screen))
-                removeAlignmentScreen = null;
-        };
-
-        removeAlignmentScreen = screen;
-        MyGuiSandbox.AddScreen(screen);
-    }
-
-    private void HandlePopupAlignmentRemoval(SavedConnectorAlignment savedAlignment)
-    {
-        if (savedAlignment == null)
-            return;
-
-        RemoveSavedAlignment(
-            savedAlignment,
-            $"AutoDock: removed saved alignment for {savedAlignment.GetDisplayName(savedAlignmentService.GetGridDisplayName(MySession.Static?.ControlledGrid))}.");
-    }
-
-    private void RemoveSavedAlignment(SavedConnectorAlignment savedAlignment, string message)
-    {
-        savedAlignmentService.RemoveSavedAlignment(savedAlignment);
-        HandleAlignmentChanged();
-        Notify(message, "Green");
-    }
-
-    private void HandleAlignmentChanged()
+    private void HandleRotationChanged()
     {
         if (!active)
             return;
@@ -285,11 +220,11 @@ internal sealed class AutoDockController
     {
         if (autoDockPilot.IsActive)
         {
-            DockingOverlayRenderer.DrawActivePair(autoDockPilot.ActivePair);
+            DockingOverlayRenderer.DrawActivePair(autoDockPilot.ActivePair, lockRotationService);
             return;
         }
 
-        DockingOverlayRenderer.DrawPreview(active, pairCatalog.Pairs, pairCatalog.SelectedIndex);
+        DockingOverlayRenderer.DrawPreview(active, pairCatalog.Pairs, pairCatalog.SelectedIndex, lockRotationService);
     }
 
     private void NotifySelection()
@@ -303,11 +238,14 @@ internal sealed class AutoDockController
             : pair.InRange
                 ? "in range"
                 : $"outside {AutoDockConstants.GetSearchRadius():0.#} m range";
-        string savedAlignmentState = pair.HasSavedAlignment ? ", saved alignment" : "";
+        lockRotationService.TryGetRotationStep(pair, out int rotationStep);
+        int angleDegrees = DockingMath.TryGetOrientationAngleDegrees(pair, rotationStep, out int projectedAngleDegrees)
+            ? projectedAngleDegrees
+            : DockingMath.GetRotationAngleDegrees(rotationStep);
         int connectorNumber = pairCatalog.SelectedConnectorIndex >= 0 ? pairCatalog.SelectedConnectorIndex + 1 : 1;
         int pairNumber = pairCatalog.SelectedIndex >= 0 ? pairCatalog.SelectedIndex + 1 : 1;
         Notify(
-            $"AutoDock: connector {connectorNumber}/{Math.Max(1, pairCatalog.ConnectorCount)}, pair {pairNumber}/{Math.Max(1, pairCatalog.PairCount)}, {pair.Distance:0.0} m, {state}{savedAlignmentState}.",
+            $"AutoDock: connector {connectorNumber}/{Math.Max(1, pairCatalog.ConnectorCount)}, pair {pairNumber}/{Math.Max(1, pairCatalog.PairCount)}, {pair.Distance:0.0} m, {state}, angle {angleDegrees} deg.",
             pair.InRange ? "White" : "Red");
     }
 
@@ -316,7 +254,15 @@ internal sealed class AutoDockController
         autoDockPilot.Reset();
         active = false;
         framesUntilRescan = 0;
+        lockRotationService.ClearSelectedRotations();
         pairCatalog.ClearTransientState();
+    }
+
+    private void ResetSessionState()
+    {
+        ClearSelection();
+        lockRotationService.ClearRememberedRotations();
+        pairCatalog.ClearRememberedConnectorSelection();
     }
 
     private static void Notify(string message, string font)

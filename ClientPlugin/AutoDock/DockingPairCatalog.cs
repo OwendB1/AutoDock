@@ -9,18 +9,18 @@ namespace ClientPlugin;
 
 internal sealed class DockingPairCatalog
 {
-    private readonly SavedAlignmentService savedAlignmentService;
+    private readonly LockRotationService lockRotationService;
     private readonly List<DockingPair> pairs = new List<DockingPair>();
     private readonly List<MyShipConnector> localConnectors = new List<MyShipConnector>();
     private readonly Dictionary<long, List<DockingPair>> pairsByLocalConnectorId = new Dictionary<long, List<DockingPair>>();
     private readonly HashSet<PairKey> pairKeys = new HashSet<PairKey>();
+    private readonly Dictionary<long, long> preferredLocalConnectorByGridId = new Dictionary<long, long>();
     private int selectedIndex = -1;
     private int selectedConnectorIndex = -1;
-    private long preferredLocalConnectorEntityId;
 
-    public DockingPairCatalog(SavedAlignmentService savedAlignmentService)
+    public DockingPairCatalog(LockRotationService lockRotationService)
     {
-        this.savedAlignmentService = savedAlignmentService;
+        this.lockRotationService = lockRotationService;
     }
 
     public IReadOnlyList<DockingPair> Pairs => pairs;
@@ -31,8 +31,11 @@ internal sealed class DockingPairCatalog
 
     public void RememberPreferredConnector(MyShipConnector localConnector)
     {
-        if (localConnector != null)
-            preferredLocalConnectorEntityId = localConnector.EntityId;
+        MyCubeGrid grid = localConnector?.CubeGrid;
+        if (grid == null || grid.MarkedForClose)
+            return;
+
+        preferredLocalConnectorByGridId[grid.EntityId] = localConnector.EntityId;
     }
 
     public void RescanPairs(bool preserveSelection)
@@ -88,7 +91,7 @@ internal sealed class DockingPairCatalog
             return;
         }
 
-        long desiredLocalId = previousLocalId == 0 ? preferredLocalConnectorEntityId : previousLocalId;
+        long desiredLocalId = previousLocalId == 0 ? GetPreferredConnectorId(controlledGrid) : previousLocalId;
         selectedConnectorIndex = FindLocalConnectorIndex(desiredLocalId);
         if (selectedConnectorIndex < 0)
             selectedConnectorIndex = 0;
@@ -166,9 +169,14 @@ internal sealed class DockingPairCatalog
         pairsByLocalConnectorId.Clear();
     }
 
+    public void ClearRememberedConnectorSelection()
+    {
+        preferredLocalConnectorByGridId.Clear();
+    }
+
     private void AddPairsNear(MyShipConnector localConnector, float radius, List<DockingPair> connectorPairs)
     {
-        Vector3D position = localConnector.PositionComp.GetPosition();
+        Vector3D position = DockingMath.GetConnectorReferencePosition(localConnector);
         BoundingSphereD sphere = new BoundingSphereD(position, radius);
         List<MyEntity> entities = MyEntities.GetEntitiesInSphere(ref sphere);
 
@@ -213,8 +221,8 @@ internal sealed class DockingPairCatalog
         if (!pairKeys.Add(key))
             return;
 
-        Vector3D localPosition = localConnector.PositionComp.GetPosition();
-        Vector3D targetPosition = targetConnector.PositionComp.GetPosition();
+        Vector3D localPosition = DockingMath.GetConnectorReferencePosition(localConnector);
+        Vector3D targetPosition = DockingMath.GetConnectorReferencePosition(targetConnector);
         double distance = Vector3D.Distance(localPosition, targetPosition);
         if (distance > radius)
             return;
@@ -228,7 +236,7 @@ internal sealed class DockingPairCatalog
             targetConnector,
             distance,
             lockReady,
-            savedAlignmentService.HasSavedAlignment(localConnector.EntityId, targetConnector.EntityId)));
+            lockRotationService.HasRememberedRotation(localConnector.EntityId, targetConnector.EntityId)));
     }
 
     private void SelectConnectorByIndex(int connectorIndex, int fallbackPairIndex, long preferredTargetId = 0)
@@ -244,7 +252,7 @@ internal sealed class DockingPairCatalog
 
         selectedConnectorIndex = connectorIndex;
         MyShipConnector localConnector = localConnectors[connectorIndex];
-        preferredLocalConnectorEntityId = localConnector.EntityId;
+        RememberPreferredConnector(localConnector);
 
         if (!pairsByLocalConnectorId.TryGetValue(localConnector.EntityId, out List<DockingPair> connectorPairs)
             || connectorPairs.Count == 0)
@@ -280,6 +288,16 @@ internal sealed class DockingPairCatalog
         return -1;
     }
 
+    private long GetPreferredConnectorId(MyCubeGrid grid)
+    {
+        if (grid == null)
+            return 0;
+
+        return preferredLocalConnectorByGridId.TryGetValue(grid.EntityId, out long connectorId)
+            ? connectorId
+            : 0;
+    }
+
     private int FindPair(long localEntityId, long targetEntityId)
     {
         if (localEntityId == 0 || targetEntityId == 0)
@@ -308,9 +326,9 @@ internal sealed class DockingPairCatalog
         if (lockReadyComparison != 0)
             return lockReadyComparison;
 
-        int savedAlignmentComparison = y.HasSavedAlignment.CompareTo(x.HasSavedAlignment);
-        if (savedAlignmentComparison != 0)
-            return savedAlignmentComparison;
+        int rememberedRotationComparison = y.HasRememberedRotation.CompareTo(x.HasRememberedRotation);
+        if (rememberedRotationComparison != 0)
+            return rememberedRotationComparison;
 
         return x.Distance.CompareTo(y.Distance);
     }
