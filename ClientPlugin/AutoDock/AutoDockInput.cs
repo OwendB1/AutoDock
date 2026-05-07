@@ -1,6 +1,4 @@
-using ClientPlugin.Settings;
 using ClientPlugin.Settings.Tools;
-using Sandbox.Graphics.GUI;
 using VRage.Input;
 using VRage.Utils;
 

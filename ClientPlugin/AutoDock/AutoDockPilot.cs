@@ -1,5 +1,4 @@
 using Sandbox.Game.Entities;
-using Sandbox.Game.Entities.Cube;
 using Sandbox.ModAPI.Ingame;
 using VRageMath;
 

@@ -4,7 +4,6 @@ using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.GameSystems;
 using Sandbox.Game.World;
 using Sandbox.ModAPI.Ingame;
-using VRage.Game.Entity;
 using VRage.Input;
 using VRageMath;
 
@@ -455,20 +454,6 @@ internal static class DockingMath
         return targetOrientation.IsValid();
     }
 
-    private static bool TryGetDesiredLocalConnectorWorldMatrix(
-        DockingPair pair,
-        MatrixD targetOrientation,
-        out MatrixD desiredLocalConnectorWorldMatrix)
-    {
-        desiredLocalConnectorWorldMatrix = MatrixD.Identity;
-        if (!TryGetLocalConnectorGridMatrix(pair, out MatrixD localConnectorGridMatrix))
-            return false;
-
-        desiredLocalConnectorWorldMatrix = localConnectorGridMatrix * targetOrientation;
-        desiredLocalConnectorWorldMatrix.Translation = Vector3D.Zero;
-        return desiredLocalConnectorWorldMatrix.IsValid();
-    }
-
     private static bool TryGetLocalConnectorGridMatrix(DockingPair pair, out MatrixD localConnectorGridMatrix)
     {
         localConnectorGridMatrix = MatrixD.Identity;
@@ -526,50 +511,6 @@ internal static class DockingMath
                    out _);
     }
 
-    private static bool TryGetContinuousGridRotationTarget(DockingPair pair, out MatrixD targetOrientation)
-    {
-        targetOrientation = MatrixD.Identity;
-        MyCubeGrid grid = pair.Local.CubeGrid;
-        MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
-        MatrixD inverseGridMatrix = MatrixD.Invert(currentGridMatrix);
-        Vector3D desiredConnectorForward = -Vector3D.Normalize(pair.Target.WorldMatrix.Forward);
-        Vector3D localConnectorForward = Vector3D.TransformNormal(pair.Local.WorldMatrix.Forward, inverseGridMatrix);
-        Vector3D localRollReference = Vector3D.TransformNormal(GetReferenceControllerUp(grid), inverseGridMatrix);
-        if (localConnectorForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared
-            || localRollReference.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            return false;
-
-        localConnectorForward.Normalize();
-        localRollReference.Normalize();
-
-        if (RejectFromAxis(localRollReference, localConnectorForward).LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-        {
-            localRollReference = Vector3D.TransformNormal(pair.Local.WorldMatrix.Up, inverseGridMatrix);
-            if (localRollReference.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-                return false;
-
-            localRollReference.Normalize();
-        }
-
-        QuaternionD combinedRotation = CreateRotationBetweenVectors(localConnectorForward, desiredConnectorForward, localRollReference);
-        Vector3D desiredRollReference = GetDesiredRollReference(pair.Target, grid);
-        Vector3D currentProjected = RejectFromAxis(combinedRotation * localRollReference, desiredConnectorForward);
-        Vector3D desiredProjected = RejectFromAxis(desiredRollReference, desiredConnectorForward);
-        if (currentProjected.LengthSquared() > AutoDockConstants.MinConnectorDistanceSquared
-            && desiredProjected.LengthSquared() > AutoDockConstants.MinConnectorDistanceSquared)
-        {
-            currentProjected.Normalize();
-            desiredProjected.Normalize();
-            double signedAngle = SignedAngleAroundAxis(currentProjected, desiredProjected, desiredConnectorForward);
-            QuaternionD rollAlign = QuaternionD.CreateFromAxisAngle(desiredConnectorForward, signedAngle);
-            combinedRotation = QuaternionD.Normalize(rollAlign * combinedRotation);
-        }
-
-        targetOrientation = MatrixD.CreateFromQuaternion(combinedRotation);
-        targetOrientation.Translation = Vector3D.Zero;
-        return targetOrientation.IsValid();
-    }
-
     private static Vector3D GetReferenceControllerUp(MyCubeGrid grid)
     {
         return TryGetActiveShipController(grid, out MyShipController controller)
@@ -584,55 +525,10 @@ internal static class DockingMath
             : grid.WorldMatrix.Forward;
     }
 
-    private static Vector3D GetGravityVector(MyCubeGrid grid)
-    {
-        if (TryGetActiveShipController(grid, out MyShipController controller))
-            return controller.GetNaturalGravity();
-
-        return Vector3D.Zero;
-    }
-
-    private static Vector3D GetDesiredRollReference(MyShipConnector targetConnector, MyCubeGrid localGrid)
-    {
-        Vector3D gravity = GetGravityVector(localGrid);
-        if (gravity.LengthSquared() > AutoDockConstants.MinConnectorDistanceSquared)
-            return -Vector3D.Normalize(gravity);
-
-        Vector3D connectorUp = targetConnector.WorldMatrix.Up;
-        if (connectorUp.LengthSquared() > AutoDockConstants.MinConnectorDistanceSquared)
-            return Vector3D.Normalize(connectorUp);
-
-        return Vector3D.Up;
-    }
-
     private static MatrixD GetDesiredControllerWorldMatrix(MyShipController controller, MatrixD targetGridMatrix)
     {
         MatrixD controllerLocalMatrix = controller.PositionComp.LocalMatrixRef;
         return controllerLocalMatrix * targetGridMatrix;
-    }
-
-    private static QuaternionD CreateRotationBetweenVectors(Vector3D from, Vector3D to, Vector3D fallbackAxis)
-    {
-        Vector3D normalizedFrom = Vector3D.Normalize(from);
-        Vector3D normalizedTo = Vector3D.Normalize(to);
-        double dot = MathHelper.Clamp(Vector3D.Dot(normalizedFrom, normalizedTo), -1.0, 1.0);
-        if (dot >= 0.999999)
-            return QuaternionD.Identity;
-
-        if (dot <= -0.999999)
-        {
-            Vector3D axis = RejectFromAxis(fallbackAxis, normalizedFrom);
-            if (axis.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-                axis = RejectFromAxis(Vector3D.Up, normalizedFrom);
-            if (axis.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-                axis = RejectFromAxis(Vector3D.Right, normalizedFrom);
-            axis.Normalize();
-            return QuaternionD.CreateFromAxisAngle(axis, Math.PI);
-        }
-
-        Vector3D rotationAxis = Vector3D.Cross(normalizedFrom, normalizedTo);
-        rotationAxis.Normalize();
-        return QuaternionD.CreateFromAxisAngle(rotationAxis, Math.Acos(dot));
     }
 
     private static bool TryGetRotationBasis(MyShipConnector targetConnector, out Vector3D desiredForward, out Vector3D baseUp)

@@ -2,7 +2,6 @@ using System.Collections.Generic;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.World;
-using Sandbox.ModAPI.Ingame;
 using VRageMath;
 
 namespace ClientPlugin;
