@@ -4,6 +4,7 @@ using ClientPlugin.Settings;
 using ClientPlugin.Settings.Layouts;
 using HarmonyLib;
 using Sandbox.Graphics.GUI;
+using System.Reflection; 
 using VRage.Plugins;
 using VRage.Utils;
 
