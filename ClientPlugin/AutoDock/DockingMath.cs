@@ -201,7 +201,6 @@ internal static class DockingMath
     {
         MyCubeGrid grid = pair.Local.CubeGrid;
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
-        MatrixD inverseGridMatrix = grid.PositionComp.WorldMatrixNormalizedInv;
         Vector3D currentConstraintPosition = pair.Local.ConstraintPositionWorld();
         Vector3D targetVelocity = pair.Target.CubeGrid.Physics.LinearVelocity;
         Vector3D currentVelocity = pair.Local.CubeGrid.Physics.LinearVelocity;
