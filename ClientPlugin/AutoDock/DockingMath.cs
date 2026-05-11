@@ -1,4 +1,5 @@
 using System;
+using System.Reflection;
 using Sandbox.Game.Entities;
 using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.World;
@@ -10,6 +11,11 @@ namespace ClientPlugin;
 
 internal static class DockingMath
 {
+    private static readonly FieldInfo ConnectionPositionField = typeof(MyShipConnector)
+        .GetField("m_connectionPosition", BindingFlags.NonPublic | BindingFlags.Instance);
+    private static readonly FieldInfo ConnectorDummyLocalField = typeof(MyShipConnector)
+        .GetField("m_connectorDummyLocal", BindingFlags.NonPublic | BindingFlags.Instance);
+
     public static bool IsConnectorAvailable(MyShipConnector connector, bool localSide)
     {
         if (connector == null || connector.MarkedForClose || connector.CubeGrid == null || connector.CubeGrid.MarkedForClose)
@@ -23,16 +29,20 @@ internal static class DockingMath
 
     public static bool AreFacing(MyShipConnector localConnector, MyShipConnector targetConnector, Vector3D localPosition, Vector3D targetPosition)
     {
-        Vector3D delta = targetPosition - localPosition;
+        Vector3D localDummyCenter = GetConnectorDummyCenterPosition(localConnector);
+        if (localDummyCenter.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            localDummyCenter = localPosition;
+
+        Vector3D targetDummyCenter = GetConnectorDummyCenterPosition(targetConnector);
+        if (targetDummyCenter.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            targetDummyCenter = targetPosition;
+
+        Vector3D delta = targetDummyCenter - localDummyCenter;
         if (delta.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
-        Vector3D direction = Vector3D.Normalize(delta);
-        double forwardOpposition = Vector3D.Dot(localConnector.WorldMatrix.Forward, targetConnector.WorldMatrix.Forward);
-        double localAim = Vector3D.Dot(localConnector.WorldMatrix.Forward, direction);
-        double targetAim = Vector3D.Dot(targetConnector.WorldMatrix.Forward, -direction);
-
-        return forwardOpposition <= -0.65 && localAim >= 0.15 && targetAim >= 0.15;
+        return IsFacingTowards(localConnector, targetDummyCenter)
+               && IsFacingTowards(targetConnector, localDummyCenter);
     }
 
     public static bool IsLockReady(MyShipConnector localConnector, MyShipConnector targetConnector)
@@ -293,6 +303,37 @@ internal static class DockingMath
             : connector.PositionComp.GetPosition();
     }
 
+    public static Vector3D GetConnectorDummyCenterPosition(MyShipConnector connector)
+    {
+        if (connector == null)
+            return Vector3D.Zero;
+
+        if (connector.PositionComp == null)
+            return Vector3D.Zero;
+
+        if (TryGetConnectorDummyLocalMatrix(connector, out Matrix connectorDummyLocal)
+            && connector.CubeGrid?.PositionComp != null)
+        {
+            return Vector3D.Transform(
+                new Vector3D(connectorDummyLocal.Translation.X, connectorDummyLocal.Translation.Y, connectorDummyLocal.Translation.Z),
+                connector.CubeGrid.PositionComp.WorldMatrixRef);
+        }
+
+        if (ConnectionPositionField?.GetValue(connector) is Vector3 connectionPosition)
+            return Vector3D.Transform(connectionPosition, connector.PositionComp.WorldMatrixRef);
+
+        return connector.PositionComp.GetPosition();
+    }
+
+    public static Vector3D GetConnectorModelCenterPosition(MyShipConnector connector)
+    {
+        if (connector == null || connector.PositionComp == null)
+            return Vector3D.Zero;
+
+        BoundingBox localAabb = connector.PositionComp.LocalAABB;
+        return Vector3D.Transform(localAabb.Center, connector.PositionComp.WorldMatrixRef);
+    }
+
     public static int NormalizeRotationStep(int rotationStep)
     {
         rotationStep %= AutoDockConstants.LockRotationStepCount;
@@ -313,9 +354,12 @@ internal static class DockingMath
         if (!TryGetDesiredOrientationIndicator(pair, rotationStep, out Vector3D faceNormal, out Vector3D direction, out _))
             return false;
 
-        Vector3D baseDirection = RejectFromAxis(pair.Target.WorldMatrix.Up, faceNormal);
+        if (!TryGetConnectorFaceWorldMatrix(pair.Target, out MatrixD targetFaceWorldMatrix))
+            return false;
+
+        Vector3D baseDirection = RejectFromAxis(targetFaceWorldMatrix.Up, faceNormal);
         if (baseDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            baseDirection = RejectFromAxis(pair.Target.WorldMatrix.Right, faceNormal);
+            baseDirection = RejectFromAxis(targetFaceWorldMatrix.Right, faceNormal);
         if (baseDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
@@ -383,7 +427,10 @@ internal static class DockingMath
         if (localConnector == null || targetConnector == null)
             return false;
 
-        return TryQuantizeRotationStep(targetConnector, localConnector.WorldMatrix.Up, out rotationStep);
+        if (!TryGetConnectorFaceWorldMatrix(localConnector, out MatrixD localFaceWorldMatrix))
+            return false;
+
+        return TryQuantizeRotationStep(targetConnector, localFaceWorldMatrix.Up, out rotationStep);
     }
 
     public static bool TryGetDesiredOrientationIndicator(
@@ -448,6 +495,18 @@ internal static class DockingMath
             : finalConstraintPosition + approachAxis * (approachSign * AutoDockConstants.AutoDockFinalApproachDistance);
     }
 
+    private static bool IsFacingTowards(MyShipConnector connector, Vector3D otherConnectorPosition)
+    {
+        if (connector == null || connector.MarkedForClose || connector.PositionComp == null)
+            return false;
+
+        Vector3D dummyCenter = GetConnectorDummyCenterPosition(connector);
+        Vector3D modelCenter = GetConnectorModelCenterPosition(connector);
+        double dummyDistanceSquared = Vector3D.DistanceSquared(dummyCenter, otherConnectorPosition);
+        double modelDistanceSquared = Vector3D.DistanceSquared(modelCenter, otherConnectorPosition);
+        return dummyDistanceSquared + AutoDockConstants.MinConnectorDistanceSquared < modelDistanceSquared;
+    }
+
     private static bool TryCreateDockingWorldMatrix(
         DockingPair pair,
         MatrixD targetOrientation,
@@ -498,8 +557,8 @@ internal static class DockingMath
         currentGridMatrix.Translation = Vector3D.Zero;
         MatrixD inverseGridMatrix = MatrixD.Invert(currentGridMatrix);
 
-        MatrixD localConnectorWorldMatrix = pair.Local.WorldMatrix;
-        localConnectorWorldMatrix.Translation = Vector3D.Zero;
+        if (!TryGetConnectorFaceWorldMatrix(pair.Local, out MatrixD localConnectorWorldMatrix))
+            return false;
 
         localConnectorGridMatrix = localConnectorWorldMatrix * inverseGridMatrix;
         localConnectorGridMatrix.Translation = Vector3D.Zero;
@@ -569,17 +628,17 @@ internal static class DockingMath
     {
         desiredForward = Vector3D.Zero;
         baseUp = Vector3D.Zero;
-        if (targetConnector == null)
+        if (!TryGetConnectorFaceWorldMatrix(targetConnector, out MatrixD targetFaceWorldMatrix))
             return false;
 
-        desiredForward = -targetConnector.WorldMatrix.Forward;
+        desiredForward = -targetFaceWorldMatrix.Forward;
         if (desiredForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
         desiredForward.Normalize();
-        baseUp = RejectFromAxis(targetConnector.WorldMatrix.Up, desiredForward);
+        baseUp = RejectFromAxis(targetFaceWorldMatrix.Up, desiredForward);
         if (baseUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            baseUp = RejectFromAxis(targetConnector.WorldMatrix.Right, desiredForward);
+            baseUp = RejectFromAxis(targetFaceWorldMatrix.Right, desiredForward);
         if (baseUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
@@ -598,10 +657,10 @@ internal static class DockingMath
         faceNormal = Vector3D.Zero;
         direction = Vector3D.Zero;
         right = Vector3D.Zero;
-        if (targetConnector == null)
+        if (!TryGetConnectorFaceWorldMatrix(targetConnector, out MatrixD targetFaceWorldMatrix))
             return false;
 
-        faceNormal = targetConnector.WorldMatrix.Forward;
+        faceNormal = targetFaceWorldMatrix.Forward;
         if (faceNormal.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
@@ -610,9 +669,9 @@ internal static class DockingMath
         if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             direction = RejectFromAxis(desiredReferenceUp, faceNormal);
         if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            direction = RejectFromAxis(targetConnector.WorldMatrix.Up, faceNormal);
+            direction = RejectFromAxis(targetFaceWorldMatrix.Up, faceNormal);
         if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            direction = RejectFromAxis(targetConnector.WorldMatrix.Right, faceNormal);
+            direction = RejectFromAxis(targetFaceWorldMatrix.Right, faceNormal);
         if (direction.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
@@ -721,15 +780,78 @@ internal static class DockingMath
     private static bool TryGetDockingApproachAxis(MyShipConnector targetConnector, out Vector3D approachAxis)
     {
         approachAxis = Vector3D.Zero;
-        if (targetConnector == null)
+        if (!TryGetConnectorFaceWorldMatrix(targetConnector, out MatrixD targetFaceWorldMatrix))
             return false;
 
-        approachAxis = targetConnector.WorldMatrix.Forward;
+        approachAxis = targetFaceWorldMatrix.Forward;
         if (approachAxis.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
             return false;
 
         approachAxis.Normalize();
         return true;
+    }
+
+    private static bool TryGetConnectorDummyLocalMatrix(MyShipConnector connector, out Matrix connectorDummyLocal)
+    {
+        connectorDummyLocal = Matrix.Identity;
+        if (connector == null)
+            return false;
+
+        if (!(ConnectorDummyLocalField?.GetValue(connector) is Matrix reflectedDummyLocal))
+            return false;
+
+        connectorDummyLocal = reflectedDummyLocal;
+        return true;
+    }
+
+    private static bool TryGetConnectorFaceWorldMatrix(MyShipConnector connector, out MatrixD connectorFaceWorldMatrix)
+    {
+        connectorFaceWorldMatrix = MatrixD.Identity;
+        if (connector == null || connector.MarkedForClose || connector.PositionComp == null)
+            return false;
+
+        Vector3D faceNormal = GetConnectorDummyCenterPosition(connector) - GetConnectorModelCenterPosition(connector);
+        Vector3D upCandidate = connector.WorldMatrix.Up;
+        Vector3D rightCandidate = connector.WorldMatrix.Right;
+
+        if (TryGetConnectorDummyLocalMatrix(connector, out Matrix connectorDummyLocal)
+            && connector.CubeGrid?.PositionComp != null)
+        {
+            MatrixD gridWorldMatrix = connector.CubeGrid.PositionComp.WorldMatrixRef;
+            upCandidate = Vector3D.TransformNormal(
+                new Vector3D(connectorDummyLocal.Up.X, connectorDummyLocal.Up.Y, connectorDummyLocal.Up.Z),
+                gridWorldMatrix);
+            rightCandidate = Vector3D.TransformNormal(
+                new Vector3D(connectorDummyLocal.Right.X, connectorDummyLocal.Right.Y, connectorDummyLocal.Right.Z),
+                gridWorldMatrix);
+            if (faceNormal.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            {
+                faceNormal = Vector3D.TransformNormal(
+                    new Vector3D(connectorDummyLocal.Forward.X, connectorDummyLocal.Forward.Y, connectorDummyLocal.Forward.Z),
+                    gridWorldMatrix);
+            }
+        }
+
+        if (faceNormal.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            faceNormal = connector.WorldMatrix.Forward;
+        if (faceNormal.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        faceNormal.Normalize();
+        Vector3D connectorUp = RejectFromAxis(upCandidate, faceNormal);
+        if (connectorUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            connectorUp = RejectFromAxis(rightCandidate, faceNormal);
+        if (connectorUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            connectorUp = RejectFromAxis(connector.WorldMatrix.Up, faceNormal);
+        if (connectorUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            connectorUp = RejectFromAxis(connector.WorldMatrix.Right, faceNormal);
+        if (connectorUp.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            return false;
+
+        connectorUp.Normalize();
+        connectorFaceWorldMatrix = MatrixD.CreateWorld(Vector3D.Zero, faceNormal, connectorUp);
+        connectorFaceWorldMatrix.Translation = Vector3D.Zero;
+        return connectorFaceWorldMatrix.IsValid();
     }
 
     private static Vector3 CreateMoveIndicator(
