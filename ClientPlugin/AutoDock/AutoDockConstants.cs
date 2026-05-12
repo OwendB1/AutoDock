@@ -42,6 +42,17 @@ internal static class AutoDockConstants
     public const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     public const int LockRotationStepCount = 8;
     public const double LockRotationStepRadians = Math.PI * 2.0 / LockRotationStepCount;
+    public const int AutoLandingTimeoutFrames = 60 * 25;
+    public const int AutoLandingPostLockFrames = 120;
+    public const double AutoLandingRaycastRange = 120.0;
+    public const double AutoLandingRayStartOffset = 0.35;
+    public const double AutoLandingTargetOverlap = 0.12;
+    public const double AutoLandingContactTolerance = 0.22;
+    public const double AutoLandingHullClearance = 0.18;
+    public const double AutoLandingHullHardpointExclusionRadius = 0.75;
+    public const double AutoLandingMinGravity = 0.1;
+    public const double AutoLandingMaxLinearAcceleration = 1.5;
+    public const double AutoLandingMaxAngularVelocity = 0.35;
 
     public static float GetSearchRadius()
     {

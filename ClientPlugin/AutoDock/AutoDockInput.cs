@@ -7,6 +7,7 @@ namespace ClientPlugin;
 internal sealed class AutoDockInput
 {
     private static readonly MyStringId ActivationControlId = MyStringId.GetOrCompute("AutoDock.ActivationKeybind");
+    private static readonly MyStringId LandingActivationControlId = MyStringId.GetOrCompute("AutoDock.LandingActivationKeybind");
     private static readonly MyStringId PreviousPairControlId = MyStringId.GetOrCompute("AutoDock.PreviousPairKeybind");
     private static readonly MyStringId NextPairControlId = MyStringId.GetOrCompute("AutoDock.NextPairKeybind");
     private static readonly MyStringId PreviousConnectorControlId = MyStringId.GetOrCompute("AutoDock.PreviousConnectorKeybind");
@@ -14,12 +15,14 @@ internal sealed class AutoDockInput
     private static readonly MyStringId RotateAlignmentControlId = MyStringId.GetOrCompute("AutoDock.RotateAlignmentKeybind");
 
     private Binding registeredActivationKeybind = new Binding(MyKeys.None);
+    private Binding registeredLandingActivationKeybind = new Binding(MyKeys.None);
     private Binding registeredPreviousPairKeybind = new Binding(MyKeys.None);
     private Binding registeredNextPairKeybind = new Binding(MyKeys.None);
     private Binding registeredPreviousConnectorKeybind = new Binding(MyKeys.None);
     private Binding registeredNextConnectorKeybind = new Binding(MyKeys.None);
     private Binding registeredRotateAlignmentKeybind = new Binding(MyKeys.None);
     private MyControl activationControl;
+    private MyControl landingActivationControl;
     private MyControl previousPairControl;
     private MyControl nextPairControl;
     private MyControl previousConnectorControl;
@@ -36,6 +39,13 @@ internal sealed class AutoDockInput
             Config.Current.ActivationKeybind,
             ref registeredActivationKeybind,
             ref activationControl);
+        changed |= EnsureGameControl(
+            input,
+            LandingActivationControlId,
+            "AutoDock Activate Landing",
+            Config.Current.LandingActivationKeybind,
+            ref registeredLandingActivationKeybind,
+            ref landingActivationControl);
         changed |= EnsureGameControl(
             input,
             PreviousPairControlId,
@@ -85,6 +95,7 @@ internal sealed class AutoDockInput
         var unbound = new Binding(MyKeys.None);
         bool changed = false;
         changed |= EnsureGameControl(input, ActivationControlId, "AutoDock Activate Docking", unbound, ref registeredActivationKeybind, ref activationControl);
+        changed |= EnsureGameControl(input, LandingActivationControlId, "AutoDock Activate Landing", unbound, ref registeredLandingActivationKeybind, ref landingActivationControl);
         changed |= EnsureGameControl(input, PreviousPairControlId, "AutoDock Previous Pair", unbound, ref registeredPreviousPairKeybind, ref previousPairControl);
         changed |= EnsureGameControl(input, NextPairControlId, "AutoDock Next Pair", unbound, ref registeredNextPairKeybind, ref nextPairControl);
         changed |= EnsureGameControl(input, PreviousConnectorControlId, "AutoDock Previous Connector", unbound, ref registeredPreviousConnectorKeybind, ref previousConnectorControl);
@@ -98,6 +109,11 @@ internal sealed class AutoDockInput
     public bool IsActivationPressed(IMyInput input)
     {
         return IsControlNewPressed(activationControl, Config.Current.ActivationKeybind, input);
+    }
+
+    public bool IsLandingActivationPressed(IMyInput input)
+    {
+        return IsControlNewPressed(landingActivationControl, Config.Current.LandingActivationKeybind, input);
     }
 
     public bool IsCyclePreviousPressed(IMyInput input)

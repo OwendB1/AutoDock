@@ -11,16 +11,20 @@ internal sealed class AutoDockController
     private readonly LockRotationService lockRotationService;
     private readonly DockingPairCatalog pairCatalog;
     private readonly AutoDockPilot autoDockPilot;
+    private readonly AutoLandingPilot autoLandingPilot;
     private readonly AutoDockInput autoDockInput;
 
-    private bool active;
+    private bool dockingPreviewActive;
+    private bool landingPreviewActive;
     private int framesUntilRescan;
+    private AutoLandingPlan currentLandingPlan;
 
     public AutoDockController()
     {
         lockRotationService = new LockRotationService();
         pairCatalog = new DockingPairCatalog(lockRotationService);
         autoDockPilot = new AutoDockPilot(lockRotationService);
+        autoLandingPilot = new AutoLandingPilot();
         autoDockInput = new AutoDockInput();
     }
 
@@ -52,28 +56,70 @@ internal sealed class AutoDockController
         MyGuiScreenBase screenWithFocus = MyScreenManager.GetScreenWithFocus();
         if (screenWithFocus != null && screenWithFocus != MyGuiScreenGamePlay.Static)
         {
-            DrawPairs();
+            DrawSelections();
+            return;
+        }
+
+        if (autoDockInput.IsLandingActivationPressed(input))
+        {
+            if (autoDockPilot.IsActive)
+            {
+                Notify("AutoDock: connector docking active. Cancel it before auto-landing.", "Red");
+            }
+            else if (autoLandingPilot.IsActive)
+            {
+                HandleAutoLandingResult(autoLandingPilot.Cancel("AutoDock: automatic landing cancelled.", "White"));
+            }
+            else
+            {
+                HandleLandingActivationPressed();
+            }
+
+            DrawSelections();
             return;
         }
 
         if (autoDockInput.IsActivationPressed(input))
         {
-            if (autoDockPilot.IsActive)
+            if (autoLandingPilot.IsActive)
+            {
+                Notify("AutoDock: auto-landing active. Alt+P cancels landing.", "Red");
+            }
+            else if (autoDockPilot.IsActive)
+            {
                 HandleAutoDockResult(autoDockPilot.Cancel("AutoDock: automatic docking cancelled.", "White"));
+            }
             else
-                HandleActivationPressed();
+            {
+                HandleDockActivationPressed();
+            }
+
+            DrawSelections();
             return;
         }
 
         if (autoDockPilot.IsActive)
         {
             HandleAutoDockResult(autoDockPilot.Update());
-            DrawPairs();
+            DrawSelections();
             return;
         }
 
-        if (!active)
+        if (autoLandingPilot.IsActive)
+        {
+            HandleAutoLandingResult(autoLandingPilot.Update());
+            DrawSelections();
             return;
+        }
+
+        if (landingPreviewActive)
+            RefreshLandingPreview(notifyOnFailure: false);
+
+        if (!dockingPreviewActive)
+        {
+            DrawSelections();
+            return;
+        }
 
         framesUntilRescan--;
         if (framesUntilRescan <= 0)
@@ -83,8 +129,9 @@ internal sealed class AutoDockController
 
             if (pairCatalog.PairCount == 0)
             {
-                ClearSelection();
+                ClearDockSelection();
                 Notify($"AutoDock: no connector pairs within {AutoDockConstants.SoftSelectRadius:0.#} m.", "Red");
+                DrawSelections();
                 return;
             }
         }
@@ -114,7 +161,7 @@ internal sealed class AutoDockController
                 NotifySelection();
         }
 
-        DrawPairs();
+        DrawSelections();
     }
 
     public void Dispose()
@@ -125,21 +172,22 @@ internal sealed class AutoDockController
         autoDockInput.Unregister();
     }
 
-    private void HandleActivationPressed()
+    private void HandleDockActivationPressed()
     {
-        pairCatalog.RescanPairs(preserveSelection: active);
+        pairCatalog.RescanPairs(preserveSelection: dockingPreviewActive);
         framesUntilRescan = AutoDockConstants.RescanIntervalFrames;
 
         if (pairCatalog.PairCount == 0)
         {
-            ClearSelection();
+            ClearDockSelection();
             Notify($"AutoDock: no connector pairs within {AutoDockConstants.SoftSelectRadius:0.#} m.", "Red");
             return;
         }
 
-        if (!active)
+        if (!dockingPreviewActive)
         {
-            active = true;
+            ClearLandingSelection();
+            dockingPreviewActive = true;
             NotifySelection();
             return;
         }
@@ -184,11 +232,73 @@ internal sealed class AutoDockController
         StartAutoDock(pair, "AutoDock: moving selected grid into docking position.");
     }
 
+    private void HandleLandingActivationPressed()
+    {
+        if (!RefreshLandingPreview(notifyOnFailure: true))
+            return;
+
+        if (!landingPreviewActive)
+        {
+            ClearDockSelection();
+            landingPreviewActive = true;
+            NotifyLandingPreview();
+            return;
+        }
+
+        if (currentLandingPlan == null)
+            return;
+
+        if (!currentLandingPlan.HullClearanceOk)
+        {
+            Notify("AutoDock: landing pose would intersect terrain with hull.", "Red");
+            return;
+        }
+
+        if (currentLandingPlan.ExpectedReadyGearCount <= 0)
+        {
+            Notify("AutoDock: terrain under current footprint is not landable.", "Red");
+            return;
+        }
+
+        if (!DockingMath.TryGetControlledShipController(currentLandingPlan.Grid, out _))
+        {
+            Notify("AutoDock: take control of a ship controller on selected grid first.", "Red");
+            return;
+        }
+
+        StartAutoLanding(currentLandingPlan, "AutoDock: moving into landing position.");
+    }
+
+    private bool RefreshLandingPreview(bool notifyOnFailure)
+    {
+        if (!AutoLandingPlanner.TryCreatePlan(out AutoLandingPlan plan, out string error))
+        {
+            currentLandingPlan = null;
+            landingPreviewActive = false;
+            if (notifyOnFailure && !string.IsNullOrWhiteSpace(error))
+                Notify(error, "Red");
+            return false;
+        }
+
+        currentLandingPlan = plan;
+        return true;
+    }
+
     private void StartAutoDock(DockingPair pair, string message)
     {
+        ClearLandingSelection();
         autoDockPilot.Start(pair);
         pairCatalog.RememberPreferredConnector(pair?.Local);
-        active = true;
+        dockingPreviewActive = true;
+        Notify(message, "White");
+    }
+
+    private void StartAutoLanding(AutoLandingPlan plan, string message)
+    {
+        ClearDockSelection();
+        currentLandingPlan = plan;
+        landingPreviewActive = true;
+        autoLandingPilot.Start(plan);
         Notify(message, "White");
     }
 
@@ -200,7 +310,7 @@ internal sealed class AutoDockController
         switch (result.Status)
         {
             case AutoDockPilotStatus.Completed:
-                ClearSelection();
+                ClearDockSelection();
                 break;
 
             case AutoDockPilotStatus.Cancelled:
@@ -209,12 +319,28 @@ internal sealed class AutoDockController
         }
     }
 
+    private void HandleAutoLandingResult(AutoDockPilotUpdateResult result)
+    {
+        if (result.HasMessage)
+            Notify(result.Message, result.Font);
+
+        switch (result.Status)
+        {
+            case AutoDockPilotStatus.Completed:
+                ClearLandingSelection();
+                break;
+
+            case AutoDockPilotStatus.Cancelled:
+                RefreshLandingPreview(notifyOnFailure: false);
+                landingPreviewActive = currentLandingPlan != null;
+                break;
+        }
+    }
+
     private void HandleRotateAlignmentPressed()
     {
         if (!pairCatalog.TryGetSelectedPair(out DockingPair pair))
-        {
             return;
-        }
 
         lockRotationService.CycleRotationStep(pair, 1);
         HandleRotationChanged();
@@ -223,22 +349,34 @@ internal sealed class AutoDockController
 
     private void HandleRotationChanged()
     {
-        if (!active)
+        if (!dockingPreviewActive)
             return;
 
         pairCatalog.RescanPairs(preserveSelection: true);
         framesUntilRescan = AutoDockConstants.RescanIntervalFrames;
     }
 
-    private void DrawPairs()
+    private void DrawSelections()
     {
+        if (autoLandingPilot.IsActive)
+        {
+            LandingOverlayRenderer.DrawActive(autoLandingPilot.CurrentPlan);
+            return;
+        }
+
+        if (landingPreviewActive && currentLandingPlan != null)
+        {
+            LandingOverlayRenderer.DrawPreview(currentLandingPlan);
+            return;
+        }
+
         if (autoDockPilot.IsActive)
         {
             DockingOverlayRenderer.DrawActivePair(autoDockPilot.ActivePair, lockRotationService);
             return;
         }
 
-        DockingOverlayRenderer.DrawPreview(active, pairCatalog.Pairs, pairCatalog.SelectedIndex, lockRotationService);
+        DockingOverlayRenderer.DrawPreview(dockingPreviewActive, pairCatalog.Pairs, pairCatalog.SelectedIndex, lockRotationService);
     }
 
     private void NotifySelection()
@@ -263,13 +401,39 @@ internal sealed class AutoDockController
             pair.InRange ? "White" : "Red");
     }
 
-    private void ClearSelection()
+    private void NotifyLandingPreview()
+    {
+        if (currentLandingPlan == null)
+            return;
+
+        string clearanceText = double.IsInfinity(currentLandingPlan.MinHullClearance)
+            ? "open hull clearance"
+            : $"hull clearance {currentLandingPlan.MinHullClearance:0.00} m";
+        Notify(
+            $"AutoDock: landing preview {currentLandingPlan.ExpectedReadyGearCount}/{Math.Max(1, currentLandingPlan.Gears.Count)} gear(s) expected, {clearanceText}.",
+            currentLandingPlan.HullClearanceOk ? "White" : "Red");
+    }
+
+    private void ClearDockSelection()
     {
         autoDockPilot.Reset();
-        active = false;
+        dockingPreviewActive = false;
         framesUntilRescan = 0;
         lockRotationService.ClearSelectedRotations();
         pairCatalog.ClearTransientState();
+    }
+
+    private void ClearLandingSelection()
+    {
+        autoLandingPilot.Reset();
+        landingPreviewActive = false;
+        currentLandingPlan = null;
+    }
+
+    private void ClearSelection()
+    {
+        ClearDockSelection();
+        ClearLandingSelection();
     }
 
     private void ResetSessionState()

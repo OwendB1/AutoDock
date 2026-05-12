@@ -14,6 +14,7 @@ public class Config : INotifyPropertyChanged
 
     private float connectorSearchRadius = 5f;
     private Binding activationKeybind = new Binding(MyKeys.P, ctrl: true);
+    private Binding landingActivationKeybind = new Binding(MyKeys.P, alt: true);
     private Binding previousPairKeybind = new Binding(MyKeys.Up, ctrl: true);
     private Binding nextPairKeybind = new Binding(MyKeys.Down, ctrl: true);
     private Binding previousConnectorKeybind = new Binding(MyKeys.Up, alt: true);
@@ -66,6 +67,13 @@ public class Config : INotifyPropertyChanged
     {
         get => activationKeybind;
         set => SetField(ref activationKeybind, value);
+    }
+
+    [Keybind(label: "Activate landing", description: "Press once to preview landing gear contact points over terrain. Press again to begin landing.")]
+    public Binding LandingActivationKeybind
+    {
+        get => landingActivationKeybind;
+        set => SetField(ref landingActivationKeybind, value);
     }
 
     [Keybind(label: "Previous pair", description: "Select previous connector pair while AutoDock preview is active. When current connector is exhausted, continue on previous connector with possible pairs.")]

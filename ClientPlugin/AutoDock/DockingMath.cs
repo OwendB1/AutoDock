@@ -274,6 +274,75 @@ internal static class DockingMath
         AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator);
     }
 
+    public static void ApplyGridAlignmentControl(
+        ref Vector3D positionErrorIntegral,
+        ref Vector3D orientationErrorIntegral,
+        MyCubeGrid grid,
+        MyShipController controller,
+        Vector3D currentAnchorPosition,
+        Vector3D targetAnchorPosition,
+        MatrixD targetGridMatrix,
+        Vector3D targetVelocity,
+        double maxLinearAcceleration,
+        double maxAngularVelocity)
+    {
+        if (grid == null || controller == null || grid.Physics == null)
+            return;
+
+        MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
+        Vector3D currentVelocity = grid.Physics.LinearVelocity;
+        MatrixD inverseControllerMatrix = controller.PositionComp.WorldMatrixNormalizedInv;
+
+        Vector3D positionError = targetAnchorPosition - currentAnchorPosition;
+        Vector3D errorVelocity = targetVelocity - currentVelocity;
+        Vector3D orientationError = GetOrientationErrorVector(currentGridMatrix, targetGridMatrix);
+        if (positionError.LengthSquared()
+            <= AutoDockConstants.AutoDockLinearIntegralActivationDistance * AutoDockConstants.AutoDockLinearIntegralActivationDistance)
+        {
+            positionErrorIntegral += positionError * AutoDockConstants.AutoDockControlStepSeconds;
+        }
+        else
+        {
+            positionErrorIntegral = Vector3D.Zero;
+        }
+
+        if (Vector3D.Dot(positionErrorIntegral, positionError) < 0.0)
+            positionErrorIntegral = Vector3D.Zero;
+
+        positionErrorIntegral = ClampVectorMagnitude(positionErrorIntegral, AutoDockConstants.AutoDockLinearIntegralLimit);
+
+        Vector3D desiredWorldAcceleration = GetStabilizedAcceleration(
+            positionError,
+            positionErrorIntegral,
+            errorVelocity,
+            maxLinearAcceleration);
+        desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
+        Vector3 moveIndicator = CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix, maxLinearAcceleration);
+
+        orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
+        orientationErrorIntegral = ClampVectorMagnitude(orientationErrorIntegral, AutoDockConstants.AutoDockAngularIntegralLimit);
+
+        Vector3D angularVelocity = grid.Physics.AngularVelocity;
+        Vector3D desiredAngularVelocity =
+            orientationError * AutoDockConstants.AutoDockAngularProportionalGain
+            + orientationErrorIntegral * AutoDockConstants.AutoDockAngularIntegralGain;
+        desiredAngularVelocity = ClampVectorMagnitude(desiredAngularVelocity, maxAngularVelocity);
+
+        Vector3D worldTorque = (desiredAngularVelocity - angularVelocity) * AutoDockConstants.AutoDockAngularVelocityGain;
+        float torqueLimit = MathHelper.Lerp(
+            AutoDockConstants.AutoDockAngularMinTorque,
+            AutoDockConstants.AutoDockAngularMaxTorque,
+            MathHelper.Clamp((float)(orientationError.Length() / AutoDockConstants.AutoDockAngularSofteningThreshold), 0f, 1f));
+        CreateRotationInput(
+            worldTorque,
+            inverseControllerMatrix,
+            torqueLimit,
+            out Vector2 rotationIndicator,
+            out float rollIndicator);
+
+        AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator);
+    }
+
     public static void ReleaseShipControl(MyCubeGrid grid)
     {
         AutoDockControlOverride.Clear();
