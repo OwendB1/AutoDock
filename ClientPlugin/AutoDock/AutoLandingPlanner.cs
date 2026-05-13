@@ -11,6 +11,11 @@ namespace ClientPlugin;
 
 internal static class AutoLandingPlanner
 {
+    private const int CoarseAngleStepDegrees = 15;
+    private const int FineAngleSeedCount = 3;
+    private const int FineAngleRadiusDegrees = 7;
+    private const int FineAngleStepDegrees = 1;
+
     private sealed class HardpointData
     {
         public MyLandingGear Gear;
@@ -22,6 +27,22 @@ internal static class AutoLandingPlanner
         public Vector3D HitNormal;
         public bool HasHit;
         public double Distance;
+    }
+
+    private sealed class CandidateHitData
+    {
+        public Vector3D TargetWorldPositionNoVertical;
+        public Vector3D HitPosition;
+        public Vector3D HitNormal;
+        public bool HasHit;
+        public double Distance;
+    }
+
+    private sealed class LandingPlanCandidate
+    {
+        public AutoLandingPlan Plan;
+        public double PositiveGapSum;
+        public int AngleDegrees;
     }
 
     private static readonly List<MyPhysics.HitInfo> RaycastHits = new List<MyPhysics.HitInfo>(32);
@@ -82,85 +103,24 @@ internal static class AutoLandingPlanner
         Vector3D anchorLocalPosition = GetAnchorLocalPosition(hardpoints);
         Vector3D currentAnchorWorldPosition = Vector3D.Transform(anchorLocalPosition, currentGridMatrix);
         Vector3D targetUpDirection = GetTargetUpDirection(hardpoints, upDirection, referenceRight, referenceForward);
-        MatrixD targetGridMatrix = CreateTargetGridMatrix(targetUpDirection, referenceForward, referenceRight);
-
-        Vector3D targetAnchorNoTranslation = Vector3D.Transform(anchorLocalPosition, targetGridMatrix);
-        Vector3D targetLateralTranslation =
-            RejectFromAxis(currentAnchorWorldPosition, upDirection)
-            - RejectFromAxis(targetAnchorNoTranslation, upDirection);
-
-        double targetVerticalOffset = double.NegativeInfinity;
-        for (int i = 0; i < hardpoints.Count; i++)
+        if (!TrySelectBestAnglePlan(
+                grid,
+                currentGridMatrix,
+                anchorLocalPosition,
+                currentAnchorWorldPosition,
+                targetUpDirection,
+                upDirection,
+                downDirection,
+                referenceForward,
+                referenceRight,
+                hardpoints,
+                gears,
+                out plan))
         {
-            HardpointData hardpoint = hardpoints[i];
-            if (!hardpoint.HasHit)
-                continue;
-
-            Vector3D targetPointNoTranslation = Vector3D.Transform(hardpoint.LocalPosition, targetGridMatrix);
-            double requiredOffset =
-                Vector3D.Dot(hardpoint.HitPosition, upDirection)
-                - Vector3D.Dot(targetPointNoTranslation, upDirection)
-                - AutoDockConstants.AutoLandingTargetOverlap;
-            if (requiredOffset > targetVerticalOffset)
-                targetVerticalOffset = requiredOffset;
-        }
-
-        if (double.IsNegativeInfinity(targetVerticalOffset) || double.IsNaN(targetVerticalOffset) || double.IsInfinity(targetVerticalOffset))
-        {
-            error = "AutoDock: cannot resolve landing height.";
+            error = "AutoDock: cannot resolve landing pose.";
             return false;
         }
 
-        targetGridMatrix.Translation = targetLateralTranslation + upDirection * targetVerticalOffset;
-
-        var samples = new List<LandingHardpointSample>(hardpoints.Count);
-        var expectedContactGearIds = new HashSet<long>();
-        int expectedReadyHardpointCount = 0;
-        for (int i = 0; i < hardpoints.Count; i++)
-        {
-            HardpointData hardpoint = hardpoints[i];
-            Vector3D targetWorldPosition = Vector3D.Transform(hardpoint.LocalPosition, targetGridMatrix);
-            double targetGap = hardpoint.HasHit
-                ? Vector3D.Dot(targetWorldPosition - hardpoint.HitPosition, upDirection)
-                : double.PositiveInfinity;
-            bool targetContactExpected = hardpoint.HasHit && targetGap <= AutoDockConstants.AutoLandingContactTolerance;
-            if (targetContactExpected)
-            {
-                expectedReadyHardpointCount++;
-                expectedContactGearIds.Add(hardpoint.Gear.EntityId);
-            }
-
-            samples.Add(new LandingHardpointSample(
-                hardpoint.Gear,
-                hardpoint.LockPositionIndex,
-                hardpoint.LocalPosition,
-                hardpoint.HalfExtents,
-                hardpoint.CurrentWorldPosition,
-                targetWorldPosition,
-                hardpoint.HitPosition,
-                hardpoint.HitNormal,
-                hardpoint.HasHit,
-                hardpoint.Distance,
-                targetGap,
-                targetContactExpected));
-        }
-
-        EvaluateHullClearance(grid, targetGridMatrix, upDirection, downDirection, samples, out double minHullClearance, out bool hullClearanceOk);
-        plan = new AutoLandingPlan(
-            grid,
-            currentGridMatrix,
-            targetGridMatrix,
-            upDirection,
-            downDirection,
-            anchorLocalPosition,
-            currentAnchorWorldPosition,
-            Vector3D.Transform(anchorLocalPosition, targetGridMatrix),
-            samples,
-            gears,
-            expectedContactGearIds.Count,
-            expectedReadyHardpointCount,
-            minHullClearance,
-            hullClearanceOk);
         return true;
     }
 
@@ -251,6 +211,267 @@ internal static class AutoLandingPlanner
         }
 
         return count > 0 ? sum / count : Vector3D.Zero;
+    }
+
+    private static bool TrySelectBestAnglePlan(
+        MyCubeGrid grid,
+        MatrixD currentGridMatrix,
+        Vector3D anchorLocalPosition,
+        Vector3D currentAnchorWorldPosition,
+        Vector3D targetUpDirection,
+        Vector3D upDirection,
+        Vector3D downDirection,
+        Vector3D referenceForward,
+        Vector3D referenceRight,
+        IReadOnlyList<HardpointData> hardpoints,
+        IReadOnlyList<MyLandingGear> gears,
+        out AutoLandingPlan plan)
+    {
+        plan = null;
+        var coarseCandidates = new List<LandingPlanCandidate>(360 / CoarseAngleStepDegrees);
+        var candidateAngles = new HashSet<int>();
+        LandingPlanCandidate bestCandidate = null;
+        for (int angleDegrees = 0; angleDegrees < 360; angleDegrees += CoarseAngleStepDegrees)
+        {
+            if (!TryCreateCandidatePlan(
+                    grid,
+                    currentGridMatrix,
+                    anchorLocalPosition,
+                    currentAnchorWorldPosition,
+                    targetUpDirection,
+                    upDirection,
+                    downDirection,
+                    referenceForward,
+                    referenceRight,
+                    hardpoints,
+                    gears,
+                    angleDegrees,
+                    out LandingPlanCandidate candidate))
+            {
+                continue;
+            }
+
+            coarseCandidates.Add(candidate);
+            candidateAngles.Add(candidate.AngleDegrees);
+            if (bestCandidate == null || IsBetterPlanCandidate(candidate, bestCandidate))
+                bestCandidate = candidate;
+        }
+
+        if (coarseCandidates.Count == 0)
+            return false;
+
+        coarseCandidates.Sort(ComparePlanCandidates);
+        int seedCount = Math.Min(FineAngleSeedCount, coarseCandidates.Count);
+        for (int i = 0; i < seedCount; i++)
+        {
+            int seedAngleDegrees = coarseCandidates[i].AngleDegrees;
+            for (int offsetDegrees = -FineAngleRadiusDegrees; offsetDegrees <= FineAngleRadiusDegrees; offsetDegrees += FineAngleStepDegrees)
+            {
+                int angleDegrees = NormalizeAngleDegrees(seedAngleDegrees + offsetDegrees);
+                if (candidateAngles.Contains(angleDegrees))
+                    continue;
+
+                if (!TryCreateCandidatePlan(
+                        grid,
+                        currentGridMatrix,
+                        anchorLocalPosition,
+                        currentAnchorWorldPosition,
+                        targetUpDirection,
+                        upDirection,
+                        downDirection,
+                        referenceForward,
+                        referenceRight,
+                        hardpoints,
+                        gears,
+                        angleDegrees,
+                        out LandingPlanCandidate candidate))
+                {
+                    continue;
+                }
+
+                candidateAngles.Add(candidate.AngleDegrees);
+                if (bestCandidate == null || IsBetterPlanCandidate(candidate, bestCandidate))
+                    bestCandidate = candidate;
+            }
+        }
+
+        if (bestCandidate == null)
+            return false;
+
+        plan = bestCandidate.Plan;
+        return true;
+    }
+
+    private static bool TryCreateCandidatePlan(
+        MyCubeGrid grid,
+        MatrixD currentGridMatrix,
+        Vector3D anchorLocalPosition,
+        Vector3D currentAnchorWorldPosition,
+        Vector3D targetUpDirection,
+        Vector3D upDirection,
+        Vector3D downDirection,
+        Vector3D referenceForward,
+        Vector3D referenceRight,
+        IReadOnlyList<HardpointData> hardpoints,
+        IReadOnlyList<MyLandingGear> gears,
+        int angleDegrees,
+        out LandingPlanCandidate candidate)
+    {
+        candidate = null;
+        MatrixD targetGridMatrix = CreateTargetGridMatrix(targetUpDirection, referenceForward, referenceRight, angleDegrees * Math.PI / 180.0);
+        Vector3D targetAnchorNoTranslation = Vector3D.Transform(anchorLocalPosition, targetGridMatrix);
+        Vector3D provisionalTranslation = currentAnchorWorldPosition - targetAnchorNoTranslation;
+
+        var candidateHits = new List<CandidateHitData>(hardpoints.Count);
+        double targetVerticalOffset = double.NegativeInfinity;
+        int hitCount = 0;
+        for (int i = 0; i < hardpoints.Count; i++)
+        {
+            HardpointData hardpoint = hardpoints[i];
+            Vector3D targetWorldPositionNoVertical = provisionalTranslation + Vector3D.Transform(hardpoint.LocalPosition, targetGridMatrix);
+            bool hasHit = TryRaycastTerrain(grid, targetWorldPositionNoVertical, downDirection, out Vector3D hitPosition, out Vector3D hitNormal, out double distance);
+            candidateHits.Add(new CandidateHitData
+            {
+                TargetWorldPositionNoVertical = targetWorldPositionNoVertical,
+                HitPosition = hitPosition,
+                HitNormal = hitNormal,
+                HasHit = hasHit,
+                Distance = distance
+            });
+
+            if (!hasHit)
+                continue;
+
+            hitCount++;
+            double requiredOffset =
+                Vector3D.Dot(hitPosition, upDirection)
+                - Vector3D.Dot(targetWorldPositionNoVertical, upDirection)
+                - AutoDockConstants.AutoLandingTargetOverlap;
+            if (requiredOffset > targetVerticalOffset)
+                targetVerticalOffset = requiredOffset;
+        }
+
+        if (hitCount == 0 || double.IsNegativeInfinity(targetVerticalOffset) || double.IsNaN(targetVerticalOffset) || double.IsInfinity(targetVerticalOffset))
+            return false;
+
+        targetGridMatrix.Translation = provisionalTranslation + upDirection * targetVerticalOffset;
+
+        var samples = new List<LandingHardpointSample>(hardpoints.Count);
+        var expectedContactGearIds = new HashSet<long>();
+        int expectedReadyHardpointCount = 0;
+        double positiveGapSum = 0.0;
+        for (int i = 0; i < hardpoints.Count; i++)
+        {
+            HardpointData hardpoint = hardpoints[i];
+            CandidateHitData candidateHit = candidateHits[i];
+            Vector3D targetWorldPosition = candidateHit.TargetWorldPositionNoVertical + upDirection * targetVerticalOffset;
+            double targetGap = candidateHit.HasHit
+                ? Vector3D.Dot(targetWorldPosition - candidateHit.HitPosition, upDirection)
+                : double.PositiveInfinity;
+            bool targetContactExpected = candidateHit.HasHit && targetGap <= AutoDockConstants.AutoLandingContactTolerance;
+            if (targetContactExpected)
+            {
+                expectedReadyHardpointCount++;
+                expectedContactGearIds.Add(hardpoint.Gear.EntityId);
+            }
+
+            if (candidateHit.HasHit && targetGap > 0.0)
+                positiveGapSum += targetGap;
+
+            samples.Add(new LandingHardpointSample(
+                hardpoint.Gear,
+                hardpoint.LockPositionIndex,
+                hardpoint.LocalPosition,
+                hardpoint.HalfExtents,
+                hardpoint.CurrentWorldPosition,
+                targetWorldPosition,
+                candidateHit.HitPosition,
+                candidateHit.HitNormal,
+                candidateHit.HasHit,
+                candidateHit.Distance,
+                targetGap,
+                targetContactExpected));
+        }
+
+        EvaluateHullClearance(grid, targetGridMatrix, upDirection, downDirection, samples, out double minHullClearance, out bool hullClearanceOk);
+        candidate = new LandingPlanCandidate
+        {
+            Plan = new AutoLandingPlan(
+                grid,
+                currentGridMatrix,
+                targetGridMatrix,
+                upDirection,
+                downDirection,
+                anchorLocalPosition,
+                currentAnchorWorldPosition,
+                Vector3D.Transform(anchorLocalPosition, targetGridMatrix),
+                samples,
+                gears,
+                expectedContactGearIds.Count,
+                expectedReadyHardpointCount,
+                minHullClearance,
+                hullClearanceOk),
+            PositiveGapSum = positiveGapSum,
+            AngleDegrees = NormalizeAngleDegrees(angleDegrees)
+        };
+        return true;
+    }
+
+    private static int ComparePlanCandidates(LandingPlanCandidate left, LandingPlanCandidate right)
+    {
+        if (IsBetterPlanCandidate(left, right))
+            return -1;
+
+        if (IsBetterPlanCandidate(right, left))
+            return 1;
+
+        return 0;
+    }
+
+    private static bool IsBetterPlanCandidate(LandingPlanCandidate candidate, LandingPlanCandidate currentBest)
+    {
+        if (candidate.Plan.HullClearanceOk != currentBest.Plan.HullClearanceOk)
+            return candidate.Plan.HullClearanceOk;
+
+        if (candidate.Plan.ExpectedReadyGearCount != currentBest.Plan.ExpectedReadyGearCount)
+            return candidate.Plan.ExpectedReadyGearCount > currentBest.Plan.ExpectedReadyGearCount;
+
+        if (candidate.Plan.ExpectedReadyHardpointCount != currentBest.Plan.ExpectedReadyHardpointCount)
+            return candidate.Plan.ExpectedReadyHardpointCount > currentBest.Plan.ExpectedReadyHardpointCount;
+
+        if (Math.Abs(candidate.PositiveGapSum - currentBest.PositiveGapSum) > 1e-6)
+            return candidate.PositiveGapSum < currentBest.PositiveGapSum;
+
+        bool candidateInfiniteClearance = double.IsInfinity(candidate.Plan.MinHullClearance);
+        bool currentInfiniteClearance = double.IsInfinity(currentBest.Plan.MinHullClearance);
+        if (candidateInfiniteClearance != currentInfiniteClearance)
+            return candidateInfiniteClearance;
+
+        if (!candidateInfiniteClearance && Math.Abs(candidate.Plan.MinHullClearance - currentBest.Plan.MinHullClearance) > 1e-6)
+            return candidate.Plan.MinHullClearance > currentBest.Plan.MinHullClearance;
+
+        int candidateAngleDistanceDegrees = GetAngleDistanceDegrees(candidate.AngleDegrees);
+        int currentAngleDistanceDegrees = GetAngleDistanceDegrees(currentBest.AngleDegrees);
+        if (candidateAngleDistanceDegrees != currentAngleDistanceDegrees)
+            return candidateAngleDistanceDegrees < currentAngleDistanceDegrees;
+
+        return candidate.Plan.AnchorDistance < currentBest.Plan.AnchorDistance;
+    }
+
+    private static int NormalizeAngleDegrees(int angleDegrees)
+    {
+        int normalizedAngleDegrees = angleDegrees % 360;
+        if (normalizedAngleDegrees < 0)
+            normalizedAngleDegrees += 360;
+        return normalizedAngleDegrees;
+    }
+
+    private static int GetAngleDistanceDegrees(int angleDegrees)
+    {
+        int normalizedAngleDegrees = NormalizeAngleDegrees(angleDegrees);
+        return normalizedAngleDegrees <= 180
+            ? normalizedAngleDegrees
+            : 360 - normalizedAngleDegrees;
     }
 
     private static Vector3D GetTargetUpDirection(
@@ -349,17 +570,48 @@ internal static class AutoLandingPlanner
 
     private static MatrixD CreateTargetGridMatrix(Vector3D targetUpDirection, Vector3D preferredForward, Vector3D preferredRight)
     {
-        Vector3D targetForward = RejectFromAxis(preferredForward, targetUpDirection);
-        if (targetForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            targetForward = Vector3D.Cross(preferredRight, targetUpDirection);
-        if (targetForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            targetForward = Vector3D.Cross(Vector3D.Right, targetUpDirection);
-        if (targetForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            targetForward = Vector3D.Cross(Vector3D.Forward, targetUpDirection);
-        if (targetForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            targetForward = RejectFromAxis(Vector3D.Up, targetUpDirection);
-        if (targetForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            targetForward = Vector3D.Right;
+        return CreateTargetGridMatrix(targetUpDirection, preferredForward, preferredRight, 0.0);
+    }
+
+    private static MatrixD CreateTargetGridMatrix(
+        Vector3D targetUpDirection,
+        Vector3D preferredForward,
+        Vector3D preferredRight,
+        double angleOffsetRadians)
+    {
+        Vector3D baseForward = RejectFromAxis(preferredForward, targetUpDirection);
+        if (baseForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseForward = Vector3D.Cross(preferredRight, targetUpDirection);
+        if (baseForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseForward = Vector3D.Cross(Vector3D.Right, targetUpDirection);
+        if (baseForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseForward = Vector3D.Cross(Vector3D.Forward, targetUpDirection);
+        if (baseForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseForward = RejectFromAxis(Vector3D.Up, targetUpDirection);
+        if (baseForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseForward = Vector3D.Right;
+
+        baseForward.Normalize();
+        Vector3D baseRight = Vector3D.Cross(baseForward, targetUpDirection);
+        if (baseRight.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseRight = RejectFromAxis(preferredRight, targetUpDirection);
+        if (baseRight.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseRight = Vector3D.Cross(baseForward, Vector3D.Up);
+        if (baseRight.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseRight = Vector3D.Cross(baseForward, Vector3D.Right);
+        if (baseRight.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseRight = Vector3D.Cross(baseForward, Vector3D.Forward);
+        if (baseRight.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+            baseRight = Vector3D.Forward;
+
+        baseRight.Normalize();
+        Vector3D targetForward = baseForward;
+        if (Math.Abs(angleOffsetRadians) > 1e-9)
+        {
+            targetForward = baseForward * Math.Cos(angleOffsetRadians) + baseRight * Math.Sin(angleOffsetRadians);
+            if (targetForward.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
+                targetForward = baseForward;
+        }
 
         targetForward.Normalize();
         MatrixD targetGridMatrix = MatrixD.CreateWorld(Vector3D.Zero, targetForward, targetUpDirection);
