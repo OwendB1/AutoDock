@@ -194,7 +194,7 @@ internal static class LandingOverlayRenderer
 
             Vector3D hullPoint = sample.HullWorldPosition + plan.UpDirection * 0.04;
             DrawMarker(hullPoint, hullColor, ViolationMarkerSize);
-            if (!sample.HasTerrainHit)
+            if (!sample.HasTerrainReference)
                 continue;
 
             Vector3D terrainPoint = sample.TerrainWorldPosition + plan.UpDirection * 0.06;

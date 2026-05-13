@@ -50,6 +50,7 @@ internal static class AutoDockConstants
     public const double AutoLandingContactTolerance = 0.22;
     public const double AutoLandingHullClearance = 0.18;
     public const double AutoLandingHullHardpointExclusionRadius = 0.75;
+    public const double AutoLandingHullSurfaceProbeRange = 2.5;
     public const double AutoLandingMinGravity = 0.1;
     public const int AutoLandingMaxYawDegrees = 5;
     public const double AutoLandingMaxLinearAcceleration = 1.5;

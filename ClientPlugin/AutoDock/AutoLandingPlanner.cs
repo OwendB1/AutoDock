@@ -16,6 +16,7 @@ internal static class AutoLandingPlanner
         public MyLandingGear Gear;
         public int LockPositionIndex;
         public Vector3D LocalPosition;
+        public MatrixD LocalLockMatrix;
         public Vector3 HalfExtents;
         public Vector3D CurrentWorldPosition;
         public Vector3D HitPosition;
@@ -131,6 +132,8 @@ internal static class AutoLandingPlanner
             for (int i = 0; i < gear.LockPositions.Length; i++)
             {
                 MatrixD lockPosition = gear.LockPositions[i];
+                MatrixD localLockMatrix = MatrixD.Normalize(lockPosition);
+                localLockMatrix.Translation = Vector3D.Zero;
                 gear.GetBoxFromMatrix(lockPosition, out Vector3 halfExtents, out Vector3D currentWorldPosition, out _);
                 Vector3D localPosition = Vector3D.Transform(currentWorldPosition, inverseGridMatrix);
                 bool hasHit = TryRaycastTerrain(grid, currentWorldPosition, downDirection, out Vector3D hitPosition, out Vector3D hitNormal, out double distance);
@@ -139,6 +142,7 @@ internal static class AutoLandingPlanner
                     Gear = gear,
                     LockPositionIndex = i,
                     LocalPosition = localPosition,
+                    LocalLockMatrix = localLockMatrix,
                     HalfExtents = halfExtents,
                     CurrentWorldPosition = currentWorldPosition,
                     HitPosition = hitPosition,
@@ -359,10 +363,11 @@ internal static class AutoLandingPlanner
             HardpointData hardpoint = hardpoints[i];
             CandidateHitData candidateHit = candidateHits[i];
             Vector3D targetWorldPosition = candidateHit.TargetWorldPositionNoVertical + upDirection * targetVerticalOffset;
+            double readyLockDistance = GetReadyLockDistance(hardpoint, targetGridMatrix, upDirection);
             double targetGap = candidateHit.HasHit
                 ? Vector3D.Dot(targetWorldPosition - candidateHit.HitPosition, upDirection)
                 : double.PositiveInfinity;
-            bool targetContactExpected = candidateHit.HasHit && targetGap <= AutoDockConstants.AutoLandingContactTolerance;
+            bool targetContactExpected = candidateHit.HasHit && targetGap <= readyLockDistance;
             if (targetContactExpected)
             {
                 expectedReadyHardpointCount++;
@@ -384,6 +389,7 @@ internal static class AutoLandingPlanner
                 candidateHit.HasHit,
                 candidateHit.Distance,
                 targetGap,
+                readyLockDistance,
                 targetContactExpected));
         }
 
@@ -617,6 +623,7 @@ internal static class AutoLandingPlanner
         minHullClearance = double.PositiveInfinity;
         hullClearanceOk = true;
         hullIntersectionCount = 0;
+        double readyLockCushion = GetLandingGearReadyCushion(hardpoints);
         BoundingBox localAabb = grid.PositionComp.LocalAABB;
         Vector3 min = localAabb.Min;
         Vector3 max = localAabb.Max;
@@ -646,17 +653,25 @@ internal static class AutoLandingPlanner
                 sampleWorldPosition,
                 sampleWorldPosition + upDirection * AutoDockConstants.AutoLandingHullClearance,
                 out _);
-            bool hasHit = TryRaycastTerrain(grid, sampleWorldPosition, downDirection, out Vector3D hitPosition, out _, out _);
-            double clearance = hasHit
-                ? Vector3D.Dot(sampleWorldPosition - hitPosition, upDirection)
-                : isInsideVoxel
-                    ? -AutoDockConstants.AutoLandingHullClearance
-                    : double.PositiveInfinity;
-            if (clearance < minHullClearance)
-                minHullClearance = clearance;
+            bool hasTerrainReference = TryFindNearestTerrainPointOnAxis(
+                grid,
+                sampleWorldPosition,
+                upDirection,
+                AutoDockConstants.AutoLandingHullSurfaceProbeRange,
+                out Vector3D terrainPoint,
+                out double rawClearance);
+            if (!hasTerrainReference && isInsideVoxel)
+                rawClearance = -AutoDockConstants.AutoLandingHullClearance;
 
-            bool violatesClearance = isInsideVoxel
-                || (!isNearHardpoint && hasHit && clearance < AutoDockConstants.AutoLandingHullClearance);
+            double effectiveClearance = double.IsInfinity(rawClearance)
+                ? rawClearance
+                : rawClearance + readyLockCushion;
+            if (effectiveClearance < minHullClearance)
+                minHullClearance = effectiveClearance;
+
+            bool violatesClearance = !isNearHardpoint
+                && (isInsideVoxel || hasTerrainReference)
+                && effectiveClearance < AutoDockConstants.AutoLandingHullClearance;
             if (violatesClearance)
             {
                 hullClearanceOk = false;
@@ -665,13 +680,53 @@ internal static class AutoLandingPlanner
 
             hullClearanceSamples.Add(new LandingHullClearanceSample(
                 sampleWorldPosition,
-                hasHit ? hitPosition : sampleWorldPosition,
-                hasHit,
-                clearance,
+                hasTerrainReference ? terrainPoint : sampleWorldPosition,
+                hasTerrainReference,
+                effectiveClearance,
                 isInsideVoxel,
                 isNearHardpoint,
                 violatesClearance));
         }
+    }
+
+    private static double GetReadyLockDistance(HardpointData hardpoint, MatrixD targetGridMatrix, Vector3D upDirection)
+    {
+        MatrixD worldLockMatrix = hardpoint.LocalLockMatrix * targetGridMatrix;
+        return
+            Math.Abs(Vector3D.Dot(worldLockMatrix.Right, upDirection)) * hardpoint.HalfExtents.X
+            + Math.Abs(Vector3D.Dot(worldLockMatrix.Up, upDirection)) * hardpoint.HalfExtents.Y
+            + Math.Abs(Vector3D.Dot(worldLockMatrix.Forward, upDirection)) * hardpoint.HalfExtents.Z;
+    }
+
+    private static double GetLandingGearReadyCushion(IReadOnlyList<LandingHardpointSample> hardpoints)
+    {
+        var bestPerGear = new Dictionary<long, double>();
+        for (int i = 0; i < hardpoints.Count; i++)
+        {
+            LandingHardpointSample hardpoint = hardpoints[i];
+            if (!hardpoint.HasHit || !hardpoint.TargetContactExpected || hardpoint.Gear == null)
+                continue;
+
+            double raiseAllowance = hardpoint.ReadyLockDistance - hardpoint.TargetGap;
+            if (raiseAllowance <= 0.0)
+                continue;
+
+            long gearId = hardpoint.Gear.EntityId;
+            if (!bestPerGear.TryGetValue(gearId, out double currentBest) || raiseAllowance > currentBest)
+                bestPerGear[gearId] = raiseAllowance;
+        }
+
+        if (bestPerGear.Count == 0)
+            return 0.0;
+
+        double limitingCushion = double.PositiveInfinity;
+        foreach (double gearCushion in bestPerGear.Values)
+        {
+            if (gearCushion < limitingCushion)
+                limitingCushion = gearCushion;
+        }
+
+        return double.IsInfinity(limitingCushion) ? 0.0 : limitingCushion;
     }
 
     private static bool IsNearHardpoint(Vector3D sampleWorldPosition, IReadOnlyList<LandingHardpointSample> hardpoints)
@@ -702,6 +757,74 @@ internal static class AutoLandingPlanner
 
         Vector3D start = worldPosition - downDirection * AutoDockConstants.AutoLandingRayStartOffset;
         Vector3D end = worldPosition + downDirection * AutoDockConstants.AutoLandingRaycastRange;
+        if (!TryRaycastTerrainSegment(grid, start, end, out hitPosition, out hitNormal, out _))
+            return false;
+
+        distance = Vector3D.Dot(hitPosition - worldPosition, downDirection);
+        return true;
+    }
+
+    private static bool TryFindNearestTerrainPointOnAxis(
+        MyCubeGrid grid,
+        Vector3D worldPosition,
+        Vector3D upDirection,
+        double probeRange,
+        out Vector3D terrainPoint,
+        out double clearance)
+    {
+        terrainPoint = Vector3D.Zero;
+        clearance = double.PositiveInfinity;
+        if (grid == null || upDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared || probeRange <= 0.0)
+            return false;
+
+        bool found = false;
+        if (TryRaycastTerrainSegment(
+                grid,
+                worldPosition + upDirection * probeRange,
+                worldPosition - upDirection * probeRange,
+                out Vector3D forwardPoint,
+                out _,
+                out _))
+        {
+            terrainPoint = forwardPoint;
+            clearance = Vector3D.Dot(worldPosition - forwardPoint, upDirection);
+            found = true;
+        }
+
+        if (TryRaycastTerrainSegment(
+                grid,
+                worldPosition - upDirection * probeRange,
+                worldPosition + upDirection * probeRange,
+                out Vector3D reversePoint,
+                out _,
+                out _))
+        {
+            double reverseClearance = Vector3D.Dot(worldPosition - reversePoint, upDirection);
+            if (!found || Math.Abs(reverseClearance) < Math.Abs(clearance))
+            {
+                terrainPoint = reversePoint;
+                clearance = reverseClearance;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private static bool TryRaycastTerrainSegment(
+        MyCubeGrid grid,
+        Vector3D start,
+        Vector3D end,
+        out Vector3D hitPosition,
+        out Vector3D hitNormal,
+        out double distance)
+    {
+        hitPosition = Vector3D.Zero;
+        hitNormal = Vector3D.Zero;
+        distance = double.PositiveInfinity;
+        if (grid == null)
+            return false;
+
         RaycastHits.Clear();
         MyPhysics.CastRay(start, end, RaycastHits, 15);
         try
@@ -724,9 +847,9 @@ internal static class AutoLandingPlanner
                 if (hitNormal.LengthSquared() >= AutoDockConstants.MinConnectorDistanceSquared)
                     hitNormal.Normalize();
                 else
-                    hitNormal = -downDirection;
+                    hitNormal = Vector3D.Normalize(start - end);
 
-                distance = Vector3D.Dot(hitPosition - worldPosition, downDirection);
+                distance = Vector3D.Distance(start, hitPosition);
                 return true;
             }
 

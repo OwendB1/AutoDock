@@ -19,6 +19,7 @@ internal sealed class LandingHardpointSample
     public readonly bool HasHit;
     public readonly double Distance;
     public readonly double TargetGap;
+    public readonly double ReadyLockDistance;
     public readonly bool TargetContactExpected;
 
     public LandingHardpointSample(
@@ -33,6 +34,7 @@ internal sealed class LandingHardpointSample
         bool hasHit,
         double distance,
         double targetGap,
+        double readyLockDistance,
         bool targetContactExpected)
     {
         Gear = gear;
@@ -46,6 +48,7 @@ internal sealed class LandingHardpointSample
         HasHit = hasHit;
         Distance = distance;
         TargetGap = targetGap;
+        ReadyLockDistance = readyLockDistance;
         TargetContactExpected = targetContactExpected;
     }
 }
@@ -54,7 +57,7 @@ internal sealed class LandingHullClearanceSample
 {
     public readonly Vector3D HullWorldPosition;
     public readonly Vector3D TerrainWorldPosition;
-    public readonly bool HasTerrainHit;
+    public readonly bool HasTerrainReference;
     public readonly double Clearance;
     public readonly bool IsInsideVoxel;
     public readonly bool IsNearHardpoint;
@@ -63,7 +66,7 @@ internal sealed class LandingHullClearanceSample
     public LandingHullClearanceSample(
         Vector3D hullWorldPosition,
         Vector3D terrainWorldPosition,
-        bool hasTerrainHit,
+        bool hasTerrainReference,
         double clearance,
         bool isInsideVoxel,
         bool isNearHardpoint,
@@ -71,7 +74,7 @@ internal sealed class LandingHullClearanceSample
     {
         HullWorldPosition = hullWorldPosition;
         TerrainWorldPosition = terrainWorldPosition;
-        HasTerrainHit = hasTerrainHit;
+        HasTerrainReference = hasTerrainReference;
         Clearance = clearance;
         IsInsideVoxel = isInsideVoxel;
         IsNearHardpoint = isNearHardpoint;
