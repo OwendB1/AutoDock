@@ -393,7 +393,16 @@ internal static class AutoLandingPlanner
                 targetContactExpected));
         }
 
-        EvaluateHullClearance(grid, targetGridMatrix, upDirection, downDirection, samples, out double minHullClearance, out bool hullClearanceOk);
+        EvaluateHullClearance(
+            grid,
+            targetGridMatrix,
+            upDirection,
+            downDirection,
+            samples,
+            out List<LandingHullClearanceSample> hullClearanceSamples,
+            out double minHullClearance,
+            out bool hullClearanceOk,
+            out int hullIntersectionCount);
         candidate = new LandingPlanCandidate
         {
             Plan = new AutoLandingPlan(
@@ -406,11 +415,13 @@ internal static class AutoLandingPlanner
                 currentAnchorWorldPosition,
                 Vector3D.Transform(anchorLocalPosition, targetGridMatrix),
                 samples,
+                hullClearanceSamples,
                 gears,
                 expectedContactGearIds.Count,
                 expectedReadyHardpointCount,
                 minHullClearance,
-                hullClearanceOk),
+                hullClearanceOk,
+                hullIntersectionCount),
             PositiveGapSum = positiveGapSum,
             AngleDegrees = NormalizeAngleDegrees(angleDegrees)
         };
@@ -625,11 +636,15 @@ internal static class AutoLandingPlanner
         Vector3D upDirection,
         Vector3D downDirection,
         IReadOnlyList<LandingHardpointSample> hardpoints,
+        out List<LandingHullClearanceSample> hullClearanceSamples,
         out double minHullClearance,
-        out bool hullClearanceOk)
+        out bool hullClearanceOk,
+        out int hullIntersectionCount)
     {
+        hullClearanceSamples = new List<LandingHullClearanceSample>(13);
         minHullClearance = double.PositiveInfinity;
         hullClearanceOk = true;
+        hullIntersectionCount = 0;
         BoundingBox localAabb = grid.PositionComp.LocalAABB;
         Vector3 min = localAabb.Min;
         Vector3 max = localAabb.Max;
@@ -654,25 +669,36 @@ internal static class AutoLandingPlanner
         for (int i = 0; i < samples.Count; i++)
         {
             Vector3D sampleWorldPosition = Vector3D.Transform(samples[i], targetGridMatrix);
-            if (MyEntities.IsInsideVoxel(sampleWorldPosition, sampleWorldPosition + upDirection * AutoDockConstants.AutoLandingHullClearance, out _))
-            {
-                minHullClearance = -1.0;
-                hullClearanceOk = false;
-                return;
-            }
-
-            if (!TryRaycastTerrain(grid, sampleWorldPosition, downDirection, out Vector3D hitPosition, out _, out _))
-                continue;
-
-            double clearance = Vector3D.Dot(sampleWorldPosition - hitPosition, upDirection);
+            bool isNearHardpoint = IsNearHardpoint(sampleWorldPosition, hardpoints);
+            bool isInsideVoxel = MyEntities.IsInsideVoxel(
+                sampleWorldPosition,
+                sampleWorldPosition + upDirection * AutoDockConstants.AutoLandingHullClearance,
+                out _);
+            bool hasHit = TryRaycastTerrain(grid, sampleWorldPosition, downDirection, out Vector3D hitPosition, out _, out _);
+            double clearance = hasHit
+                ? Vector3D.Dot(sampleWorldPosition - hitPosition, upDirection)
+                : isInsideVoxel
+                    ? -AutoDockConstants.AutoLandingHullClearance
+                    : double.PositiveInfinity;
             if (clearance < minHullClearance)
                 minHullClearance = clearance;
 
-            if (IsNearHardpoint(sampleWorldPosition, hardpoints))
-                continue;
-
-            if (clearance < AutoDockConstants.AutoLandingHullClearance)
+            bool violatesClearance = isInsideVoxel
+                || (!isNearHardpoint && hasHit && clearance < AutoDockConstants.AutoLandingHullClearance);
+            if (violatesClearance)
+            {
                 hullClearanceOk = false;
+                hullIntersectionCount++;
+            }
+
+            hullClearanceSamples.Add(new LandingHullClearanceSample(
+                sampleWorldPosition,
+                hasHit ? hitPosition : sampleWorldPosition,
+                hasHit,
+                clearance,
+                isInsideVoxel,
+                isNearHardpoint,
+                violatesClearance));
         }
     }
 

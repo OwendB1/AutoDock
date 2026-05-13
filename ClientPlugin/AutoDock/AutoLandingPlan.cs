@@ -1,3 +1,4 @@
+using System;
 using System.Collections.Generic;
 using Sandbox.Game.Entities;
 using SpaceEngineers.Game.Entities.Blocks;
@@ -49,6 +50,35 @@ internal sealed class LandingHardpointSample
     }
 }
 
+internal sealed class LandingHullClearanceSample
+{
+    public readonly Vector3D HullWorldPosition;
+    public readonly Vector3D TerrainWorldPosition;
+    public readonly bool HasTerrainHit;
+    public readonly double Clearance;
+    public readonly bool IsInsideVoxel;
+    public readonly bool IsNearHardpoint;
+    public readonly bool ViolatesClearance;
+
+    public LandingHullClearanceSample(
+        Vector3D hullWorldPosition,
+        Vector3D terrainWorldPosition,
+        bool hasTerrainHit,
+        double clearance,
+        bool isInsideVoxel,
+        bool isNearHardpoint,
+        bool violatesClearance)
+    {
+        HullWorldPosition = hullWorldPosition;
+        TerrainWorldPosition = terrainWorldPosition;
+        HasTerrainHit = hasTerrainHit;
+        Clearance = clearance;
+        IsInsideVoxel = isInsideVoxel;
+        IsNearHardpoint = isNearHardpoint;
+        ViolatesClearance = violatesClearance;
+    }
+}
+
 internal sealed class AutoLandingPlan
 {
     public readonly MyCubeGrid Grid;
@@ -60,11 +90,13 @@ internal sealed class AutoLandingPlan
     public readonly Vector3D CurrentAnchorWorldPosition;
     public readonly Vector3D TargetAnchorWorldPosition;
     public readonly IReadOnlyList<LandingHardpointSample> Hardpoints;
+    public readonly IReadOnlyList<LandingHullClearanceSample> HullClearanceSamples;
     public readonly IReadOnlyList<MyLandingGear> Gears;
     public readonly int ExpectedReadyGearCount;
     public readonly int ExpectedReadyHardpointCount;
     public readonly double MinHullClearance;
     public readonly bool HullClearanceOk;
+    public readonly int HullIntersectionCount;
 
     public AutoLandingPlan(
         MyCubeGrid grid,
@@ -76,11 +108,13 @@ internal sealed class AutoLandingPlan
         Vector3D currentAnchorWorldPosition,
         Vector3D targetAnchorWorldPosition,
         IReadOnlyList<LandingHardpointSample> hardpoints,
+        IReadOnlyList<LandingHullClearanceSample> hullClearanceSamples,
         IReadOnlyList<MyLandingGear> gears,
         int expectedReadyGearCount,
         int expectedReadyHardpointCount,
         double minHullClearance,
-        bool hullClearanceOk)
+        bool hullClearanceOk,
+        int hullIntersectionCount)
     {
         Grid = grid;
         CurrentGridMatrix = currentGridMatrix;
@@ -91,13 +125,29 @@ internal sealed class AutoLandingPlan
         CurrentAnchorWorldPosition = currentAnchorWorldPosition;
         TargetAnchorWorldPosition = targetAnchorWorldPosition;
         Hardpoints = hardpoints;
+        HullClearanceSamples = hullClearanceSamples;
         Gears = gears;
         ExpectedReadyGearCount = expectedReadyGearCount;
         ExpectedReadyHardpointCount = expectedReadyHardpointCount;
         MinHullClearance = minHullClearance;
         HullClearanceOk = hullClearanceOk;
+        HullIntersectionCount = hullIntersectionCount;
     }
 
     public bool HasTerrainContacts => ExpectedReadyHardpointCount > 0;
     public double AnchorDistance => Vector3D.Distance(CurrentAnchorWorldPosition, TargetAnchorWorldPosition);
+    public Vector3D GetCurrentAnchorWorldPosition()
+    {
+        if (Grid?.PositionComp == null || Grid.MarkedForClose)
+            return CurrentAnchorWorldPosition;
+
+        return Vector3D.Transform(AnchorLocalPosition, Grid.PositionComp.WorldMatrixRef);
+    }
+
+    public int TotalGearCount => Gears?.Count ?? 0;
+    public int DisplayGearCount => TotalGearCount > 0 ? TotalGearCount : 1;
+    public string HullClearanceText => double.IsInfinity(MinHullClearance)
+        ? "open hull clearance"
+        : $"hull clearance {MinHullClearance:0.00} m";
+    public string LandingSummaryText => $"{ExpectedReadyGearCount}/{DisplayGearCount} gear(s) expected, {HullClearanceText}";
 }

@@ -234,23 +234,23 @@ internal sealed class AutoDockController
 
     private void HandleLandingActivationPressed()
     {
-        if (!RefreshLandingPreview(notifyOnFailure: true))
-            return;
-
         if (!landingPreviewActive)
         {
+            if (!RefreshLandingPreview(notifyOnFailure: true))
+                return;
+
             ClearDockSelection();
             landingPreviewActive = true;
             NotifyLandingPreview();
             return;
         }
 
-        if (currentLandingPlan == null)
+        if (currentLandingPlan == null && !RefreshLandingPreview(notifyOnFailure: true))
             return;
 
         if (!currentLandingPlan.HullClearanceOk)
         {
-            Notify("AutoDock: landing pose would intersect terrain with hull.", "Red");
+            Notify($"AutoDock: landing pose would intersect terrain with hull. {currentLandingPlan.LandingSummaryText}.", "Red");
             return;
         }
 
@@ -406,11 +406,8 @@ internal sealed class AutoDockController
         if (currentLandingPlan == null)
             return;
 
-        string clearanceText = double.IsInfinity(currentLandingPlan.MinHullClearance)
-            ? "open hull clearance"
-            : $"hull clearance {currentLandingPlan.MinHullClearance:0.00} m";
         Notify(
-            $"AutoDock: landing preview {currentLandingPlan.ExpectedReadyGearCount}/{Math.Max(1, currentLandingPlan.Gears.Count)} gear(s) expected, {clearanceText}.",
+            $"AutoDock: landing preview {currentLandingPlan.LandingSummaryText}.",
             currentLandingPlan.HullClearanceOk ? "White" : "Red");
     }
 

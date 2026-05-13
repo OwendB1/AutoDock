@@ -13,10 +13,21 @@ internal static class LandingOverlayRenderer
     private struct OrderedPoint
     {
         public double Angle;
+        public Vector3D BasePosition;
         public Vector3D Position;
     }
 
     private static readonly MyStringId SquareMaterial = MyStringId.GetOrCompute("Square");
+    private const double HullProjectionLift = 0.35;
+    private const double TerrainProjectionLift = 0.55;
+    private const double HullProjectionMarkerSize = 0.18;
+    private const double TerrainProjectionMarkerSize = 0.24;
+    private const float HullProjectionThickness = 0.065f;
+    private const float TerrainProjectionThickness = 0.085f;
+    private const float ProjectionPostThickness = 0.035f;
+    private const float ProjectionIntensity = 2.8f;
+    private const float ViolationIntensity = 3.2f;
+    private const float HardpointIntensity = 2.2f;
 
     public static void DrawPreview(AutoLandingPlan plan)
     {
@@ -39,24 +50,33 @@ internal static class LandingOverlayRenderer
         for (int i = 0; i < plan.Gears.Count; i++)
             DrawLandingGearBox(plan.Gears[i], gearColor);
 
+        Color hullProjectionColor = plan.HullClearanceOk
+            ? (active ? new Color(0.35f, 1f, 1f, 1f) : new Color(0.55f, 1f, 1f, 1f))
+            : new Color(1f, 0.3f, 0.2f, 1f);
+        Color terrainProjectionColor = plan.HullClearanceOk
+            ? (active ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(0.45f, 1f, 0.55f, 1f))
+            : new Color(1f, 0.75f, 0.15f, 1f);
+        DrawProjectedArea(plan, useTargetPositions: true, hullProjectionColor, HullProjectionLift, HullProjectionMarkerSize, HullProjectionThickness);
+        DrawProjectedArea(plan, useTargetPositions: false, terrainProjectionColor, TerrainProjectionLift, TerrainProjectionMarkerSize, TerrainProjectionThickness);
+
         for (int i = 0; i < plan.Hardpoints.Count; i++)
         {
             LandingHardpointSample hardpoint = plan.Hardpoints[i];
             Vector3D start = active ? hardpoint.TargetWorldPosition : hardpoint.CurrentWorldPosition;
             if (!hardpoint.HasHit)
             {
-                DrawMarker(start, new Color(1f, 0f, 0f, 0.7f), 0.08);
+                DrawMarker(start + plan.UpDirection * 0.2, new Color(1f, 0.15f, 0.1f, 1f), 0.16, HardpointIntensity);
                 continue;
             }
 
             Color lineColor = hardpoint.TargetContactExpected
-                ? new Color(0f, 1f, 0.25f, 0.7f)
-                : new Color(1f, 0.75f, 0f, 0.7f);
-            DrawLine(start, hardpoint.HitPosition, lineColor, active ? 0.045f : 0.03f);
-            DrawMarker(hardpoint.HitPosition + plan.UpDirection * 0.04, lineColor, 0.09);
+                ? new Color(0.2f, 1f, 0.3f, 1f)
+                : new Color(1f, 0.85f, 0.2f, 1f);
+            DrawLine(start, hardpoint.HitPosition + plan.UpDirection * 0.2, lineColor, active ? 0.06f : 0.05f);
+            DrawMarker(hardpoint.HitPosition + plan.UpDirection * 0.2, lineColor, 0.16, HardpointIntensity);
         }
 
-        DrawProjectedArea(plan);
+        DrawHullClearanceIntersections(plan);
     }
 
     private static void DrawLandingGearBox(MyLandingGear gear, Color color)
@@ -82,24 +102,20 @@ internal static class LandingOverlayRenderer
             blendType: MyBillboard.BlendTypeEnum.LDR);
     }
 
-    private static void DrawProjectedArea(AutoLandingPlan plan)
+    private static void DrawProjectedArea(
+        AutoLandingPlan plan,
+        bool useTargetPositions,
+        Color color,
+        double offset,
+        double markerSize,
+        float lineThickness)
     {
         var ordered = new List<OrderedPoint>();
         Vector3D centroid = Vector3D.Zero;
-        for (int i = 0; i < plan.Hardpoints.Count; i++)
-        {
-            if (!plan.Hardpoints[i].HasHit)
-                continue;
-
-            Vector3D point = plan.Hardpoints[i].HitPosition + plan.UpDirection * 0.05;
-            ordered.Add(new OrderedPoint { Position = point });
-            centroid += point;
-        }
-
-        if (ordered.Count < 2)
+        if (!TryCollectProjectionPoints(plan, useTargetPositions, expectedOnly: true, offset, ordered, ref centroid)
+            && !TryCollectProjectionPoints(plan, useTargetPositions, expectedOnly: false, offset, ordered, ref centroid))
             return;
 
-        centroid /= ordered.Count;
         Vector3D planeRight = RejectFromAxis(plan.TargetGridMatrix.Right, plan.UpDirection);
         Vector3D planeForward = RejectFromAxis(plan.TargetGridMatrix.Forward, plan.UpDirection);
         if (planeRight.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared
@@ -108,6 +124,7 @@ internal static class LandingOverlayRenderer
             return;
         }
 
+        centroid /= ordered.Count;
         planeRight.Normalize();
         planeForward.Normalize();
         for (int i = 0; i < ordered.Count; i++)
@@ -121,18 +138,78 @@ internal static class LandingOverlayRenderer
         }
 
         ordered.Sort((left, right) => left.Angle.CompareTo(right.Angle));
-        Color areaColor = plan.HullClearanceOk
-            ? new Color(0f, 1f, 0.25f, 0.75f)
-            : new Color(1f, 0.2f, 0f, 0.75f);
+        for (int i = 0; i < ordered.Count; i++)
+        {
+            DrawLine(ordered[i].BasePosition, ordered[i].Position, color, ProjectionPostThickness);
+            DrawMarker(ordered[i].Position, color, markerSize, ProjectionIntensity);
+        }
+
+        if (ordered.Count < 2)
+            return;
+
         for (int i = 0; i < ordered.Count; i++)
         {
             Vector3D start = ordered[i].Position;
             Vector3D end = ordered[(i + 1) % ordered.Count].Position;
-            DrawLine(start, end, areaColor, 0.035f);
+            DrawLine(start, end, color, lineThickness);
         }
     }
 
-    private static void DrawMarker(Vector3D position, Color color, double size)
+    private static bool TryCollectProjectionPoints(
+        AutoLandingPlan plan,
+        bool useTargetPositions,
+        bool expectedOnly,
+        double offset,
+        List<OrderedPoint> ordered,
+        ref Vector3D centroid)
+    {
+        ordered.Clear();
+        centroid = Vector3D.Zero;
+        for (int i = 0; i < plan.Hardpoints.Count; i++)
+        {
+            LandingHardpointSample hardpoint = plan.Hardpoints[i];
+            if (!hardpoint.HasHit)
+                continue;
+
+            if (expectedOnly && !hardpoint.TargetContactExpected)
+                continue;
+
+            Vector3D basePoint = useTargetPositions ? hardpoint.TargetWorldPosition : hardpoint.HitPosition;
+            Vector3D point = basePoint + plan.UpDirection * offset;
+            ordered.Add(new OrderedPoint { BasePosition = basePoint, Position = point });
+            centroid += point;
+        }
+
+        return ordered.Count > 0;
+    }
+
+    private static void DrawHullClearanceIntersections(AutoLandingPlan plan)
+    {
+        if (plan.HullClearanceSamples == null || plan.HullClearanceOk)
+            return;
+
+        Color hullColor = new Color(1f, 0.15f, 0.15f, 1f);
+        Color terrainColor = new Color(1f, 0.8f, 0.15f, 1f);
+        for (int i = 0; i < plan.HullClearanceSamples.Count; i++)
+        {
+            LandingHullClearanceSample sample = plan.HullClearanceSamples[i];
+            if (!sample.ViolatesClearance)
+                continue;
+
+            Vector3D hullPoint = sample.HullWorldPosition + plan.UpDirection * 0.28;
+            DrawMarker(hullPoint, hullColor, 0.22, ViolationIntensity);
+            if (!sample.HasTerrainHit)
+                continue;
+
+            Vector3D terrainPoint = sample.TerrainWorldPosition + plan.UpDirection * 0.42;
+            DrawMarker(terrainPoint, terrainColor, 0.24, ViolationIntensity);
+            DrawLine(sample.TerrainWorldPosition, terrainPoint, terrainColor, 0.045f);
+            DrawLine(sample.HullWorldPosition, hullPoint, hullColor, 0.045f);
+            DrawLine(hullPoint, terrainPoint, hullColor, 0.07f);
+        }
+    }
+
+    private static void DrawMarker(Vector3D position, Color color, double size, float intensity = 1f)
     {
         MatrixD markerMatrix = MatrixD.CreateWorld(position, Vector3D.Forward, Vector3D.Up);
         BoundingBoxD localBox = new BoundingBoxD(
@@ -143,20 +220,21 @@ internal static class LandingOverlayRenderer
             ref markerMatrix,
             ref localBox,
             ref color,
-            MySimpleObjectRasterizer.Solid,
+            MySimpleObjectRasterizer.SolidAndWireframe,
             0,
-            0.001f,
+            0.018f,
             SquareMaterial,
             null,
             onlyFrontFaces: false,
             customViewProjection: -1,
-            blendType: MyBillboard.BlendTypeEnum.LDR);
+            blendType: MyBillboard.BlendTypeEnum.AdditiveTop,
+            intensity: intensity);
     }
 
     private static void DrawLine(Vector3D start, Vector3D end, Color color, float thickness)
     {
         Vector4 lineColor = color.ToVector4();
-        MySimpleObjectDraw.DrawLine(start, end, null, ref lineColor, thickness);
+        MySimpleObjectDraw.DrawLine(start, end, null, ref lineColor, thickness, MyBillboard.BlendTypeEnum.AdditiveTop);
     }
 
     private static Vector3D RejectFromAxis(Vector3D vector, Vector3D axis)
