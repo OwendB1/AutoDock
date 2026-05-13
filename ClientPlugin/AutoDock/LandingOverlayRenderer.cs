@@ -13,21 +13,21 @@ internal static class LandingOverlayRenderer
     private struct OrderedPoint
     {
         public double Angle;
-        public Vector3D BasePosition;
         public Vector3D Position;
     }
 
-    private static readonly MyStringId SquareMaterial = MyStringId.GetOrCompute("Square");
-    private const double HullProjectionLift = 0.35;
-    private const double TerrainProjectionLift = 0.55;
-    private const double HullProjectionMarkerSize = 0.18;
-    private const double TerrainProjectionMarkerSize = 0.24;
-    private const float HullProjectionThickness = 0.065f;
-    private const float TerrainProjectionThickness = 0.085f;
-    private const float ProjectionPostThickness = 0.035f;
-    private const float ProjectionIntensity = 2.8f;
-    private const float ViolationIntensity = 3.2f;
-    private const float HardpointIntensity = 2.2f;
+    private const double HullProjectionLift = 0.03;
+    private const double TerrainProjectionLift = 0.05;
+    private const float HullProjectionMarkerSize = 0.11f;
+    private const float TerrainProjectionMarkerSize = 0.14f;
+    private const float ViolationMarkerSize = 0.15f;
+    private const float HardpointMarkerSize = 0.1f;
+    private const float ProjectionLineThickness = 1f;
+    private const float HardpointLineThickness = 0.8f;
+    private const float ViolationLineThickness = 1.15f;
+    private const double MinLineOffset = 0.03;
+    private const double MaxLineOffset = 0.12;
+    private const double DistanceLineOffsetScale = 0.0022;
 
     public static void DrawPreview(AutoLandingPlan plan)
     {
@@ -56,8 +56,8 @@ internal static class LandingOverlayRenderer
         Color terrainProjectionColor = plan.HullClearanceOk
             ? (active ? new Color(0.2f, 1f, 0.3f, 1f) : new Color(0.45f, 1f, 0.55f, 1f))
             : new Color(1f, 0.75f, 0.15f, 1f);
-        DrawProjectedArea(plan, useTargetPositions: true, hullProjectionColor, HullProjectionLift, HullProjectionMarkerSize, HullProjectionThickness);
-        DrawProjectedArea(plan, useTargetPositions: false, terrainProjectionColor, TerrainProjectionLift, TerrainProjectionMarkerSize, TerrainProjectionThickness);
+        DrawProjectedArea(plan, useTargetPositions: true, hullProjectionColor, HullProjectionLift, HullProjectionMarkerSize, ProjectionLineThickness);
+        DrawProjectedArea(plan, useTargetPositions: false, terrainProjectionColor, TerrainProjectionLift, TerrainProjectionMarkerSize, ProjectionLineThickness);
 
         for (int i = 0; i < plan.Hardpoints.Count; i++)
         {
@@ -65,15 +65,15 @@ internal static class LandingOverlayRenderer
             Vector3D start = active ? hardpoint.TargetWorldPosition : hardpoint.CurrentWorldPosition;
             if (!hardpoint.HasHit)
             {
-                DrawMarker(start + plan.UpDirection * 0.2, new Color(1f, 0.15f, 0.1f, 1f), 0.16, HardpointIntensity);
+                DrawMarker(start + plan.UpDirection * 0.06, new Color(1f, 0.15f, 0.1f, 1f), HardpointMarkerSize);
                 continue;
             }
 
             Color lineColor = hardpoint.TargetContactExpected
                 ? new Color(0.2f, 1f, 0.3f, 1f)
                 : new Color(1f, 0.85f, 0.2f, 1f);
-            DrawLine(start, hardpoint.HitPosition + plan.UpDirection * 0.2, lineColor, active ? 0.06f : 0.05f);
-            DrawMarker(hardpoint.HitPosition + plan.UpDirection * 0.2, lineColor, 0.16, HardpointIntensity);
+            DrawLine(start, hardpoint.HitPosition + plan.UpDirection * 0.05, lineColor, HardpointLineThickness);
+            DrawMarker(hardpoint.HitPosition + plan.UpDirection * 0.05, lineColor, HardpointMarkerSize);
         }
 
         DrawHullClearanceIntersections(plan);
@@ -107,7 +107,7 @@ internal static class LandingOverlayRenderer
         bool useTargetPositions,
         Color color,
         double offset,
-        double markerSize,
+        float markerSize,
         float lineThickness)
     {
         var ordered = new List<OrderedPoint>();
@@ -139,10 +139,7 @@ internal static class LandingOverlayRenderer
 
         ordered.Sort((left, right) => left.Angle.CompareTo(right.Angle));
         for (int i = 0; i < ordered.Count; i++)
-        {
-            DrawLine(ordered[i].BasePosition, ordered[i].Position, color, ProjectionPostThickness);
-            DrawMarker(ordered[i].Position, color, markerSize, ProjectionIntensity);
-        }
+            DrawMarker(ordered[i].Position, color, markerSize);
 
         if (ordered.Count < 2)
             return;
@@ -174,9 +171,8 @@ internal static class LandingOverlayRenderer
             if (expectedOnly && !hardpoint.TargetContactExpected)
                 continue;
 
-            Vector3D basePoint = useTargetPositions ? hardpoint.TargetWorldPosition : hardpoint.HitPosition;
-            Vector3D point = basePoint + plan.UpDirection * offset;
-            ordered.Add(new OrderedPoint { BasePosition = basePoint, Position = point });
+            Vector3D point = (useTargetPositions ? hardpoint.TargetWorldPosition : hardpoint.HitPosition) + plan.UpDirection * offset;
+            ordered.Add(new OrderedPoint { Position = point });
             centroid += point;
         }
 
@@ -196,45 +192,66 @@ internal static class LandingOverlayRenderer
             if (!sample.ViolatesClearance)
                 continue;
 
-            Vector3D hullPoint = sample.HullWorldPosition + plan.UpDirection * 0.28;
-            DrawMarker(hullPoint, hullColor, 0.22, ViolationIntensity);
+            Vector3D hullPoint = sample.HullWorldPosition + plan.UpDirection * 0.04;
+            DrawMarker(hullPoint, hullColor, ViolationMarkerSize);
             if (!sample.HasTerrainHit)
                 continue;
 
-            Vector3D terrainPoint = sample.TerrainWorldPosition + plan.UpDirection * 0.42;
-            DrawMarker(terrainPoint, terrainColor, 0.24, ViolationIntensity);
-            DrawLine(sample.TerrainWorldPosition, terrainPoint, terrainColor, 0.045f);
-            DrawLine(sample.HullWorldPosition, hullPoint, hullColor, 0.045f);
-            DrawLine(hullPoint, terrainPoint, hullColor, 0.07f);
+            Vector3D terrainPoint = sample.TerrainWorldPosition + plan.UpDirection * 0.06;
+            DrawMarker(terrainPoint, terrainColor, ViolationMarkerSize);
+            DrawLine(hullPoint, terrainPoint, hullColor, ViolationLineThickness);
         }
     }
 
-    private static void DrawMarker(Vector3D position, Color color, double size, float intensity = 1f)
+    private static void DrawMarker(Vector3D position, Color color, float radius)
     {
-        MatrixD markerMatrix = MatrixD.CreateWorld(position, Vector3D.Forward, Vector3D.Up);
-        BoundingBoxD localBox = new BoundingBoxD(
-            new Vector3D(-size * 0.5, -size * 0.5, -size * 0.5),
-            new Vector3D(size * 0.5, size * 0.5, size * 0.5));
-
-        MySimpleObjectDraw.DrawTransparentBox(
-            ref markerMatrix,
-            ref localBox,
-            ref color,
-            MySimpleObjectRasterizer.SolidAndWireframe,
-            0,
-            0.018f,
-            SquareMaterial,
-            null,
-            onlyFrontFaces: false,
-            customViewProjection: -1,
-            blendType: MyBillboard.BlendTypeEnum.AdditiveTop,
-            intensity: intensity);
+        MyRenderProxy.DebugDrawSphere(position, radius, color, alpha: 1f, depthRead: false, smooth: true, cull: false);
     }
 
     private static void DrawLine(Vector3D start, Vector3D end, Color color, float thickness)
     {
-        Vector4 lineColor = color.ToVector4();
-        MySimpleObjectDraw.DrawLine(start, end, null, ref lineColor, thickness, MyBillboard.BlendTypeEnum.AdditiveTop);
+        DrawRawLine(start, end, color);
+
+        Vector3D lineDirection = end - start;
+        if (lineDirection.LengthSquared() < 1e-6)
+            return;
+
+        Vector3D midpoint = (start + end) * 0.5;
+        Vector3D cameraPosition = MyTransparentGeometry.HasCamera
+            ? MyTransparentGeometry.Camera.Translation
+            : midpoint + Vector3D.Up;
+        Vector3D toCamera = cameraPosition - midpoint;
+        Vector3D lineAxis = Vector3D.Normalize(lineDirection);
+
+        Vector3D sideOffset = Vector3D.Cross(lineAxis, toCamera);
+        if (sideOffset.LengthSquared() < 1e-6)
+            sideOffset = Vector3D.Cross(lineAxis, Vector3D.Up);
+        if (sideOffset.LengthSquared() < 1e-6)
+            sideOffset = Vector3D.Cross(lineAxis, Vector3D.Right);
+        if (sideOffset.LengthSquared() < 1e-6)
+            return;
+
+        sideOffset.Normalize();
+        Vector3D upOffset = Vector3D.Cross(lineAxis, sideOffset);
+        if (upOffset.LengthSquared() < 1e-6)
+            return;
+
+        upOffset.Normalize();
+        double cameraDistance = Math.Max(Math.Sqrt(toCamera.LengthSquared()), 1.0);
+        double offset = MathHelper.Clamp(
+            (float)(cameraDistance * DistanceLineOffsetScale * thickness),
+            (float)(MinLineOffset * thickness),
+            (float)(MaxLineOffset * thickness));
+
+        DrawRawLine(start + sideOffset * offset, end + sideOffset * offset, color);
+        DrawRawLine(start - sideOffset * offset, end - sideOffset * offset, color);
+        DrawRawLine(start + upOffset * offset, end + upOffset * offset, color);
+        DrawRawLine(start - upOffset * offset, end - upOffset * offset, color);
+    }
+
+    private static void DrawRawLine(Vector3D start, Vector3D end, Color color)
+    {
+        MyRenderProxy.DebugDrawLine3D(start, end, color, color, depthRead: false);
     }
 
     private static Vector3D RejectFromAxis(Vector3D vector, Vector3D axis)
