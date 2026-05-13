@@ -51,6 +51,9 @@ internal static class AutoDockConstants
     public const double AutoLandingHullClearance = 0.18;
     public const double AutoLandingHullHardpointExclusionRadius = 0.75;
     public const double AutoLandingHullSurfaceProbeRange = 2.5;
+    public const int AutoLandingHullBlockLayerCount = 3;
+    public const int AutoLandingHullSampleStrideCells = 2;
+    public const int AutoLandingHullMaxSamples = 160;
     public const double AutoLandingMinGravity = 0.1;
     public const int AutoLandingMaxYawDegrees = 5;
     public const double AutoLandingMaxLinearAcceleration = 1.5;

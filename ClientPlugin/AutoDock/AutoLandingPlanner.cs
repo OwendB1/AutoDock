@@ -2,6 +2,7 @@ using System;
 using System.Collections.Generic;
 using Sandbox.Engine.Physics;
 using Sandbox.Game.Entities;
+using Sandbox.Game.Entities.Cube;
 using Sandbox.Game.World;
 using SpaceEngineers.Game.Entities.Blocks;
 using VRage.Game.Entity;
@@ -39,6 +40,15 @@ internal static class AutoLandingPlanner
         public AutoLandingPlan Plan;
         public double PositiveGapSum;
         public int YawOffsetDegrees;
+    }
+
+    private struct HullFaceRectangle
+    {
+        public int Y;
+        public int MinX;
+        public int MaxX;
+        public int MinZ;
+        public int MaxZ;
     }
 
     private static readonly List<MyPhysics.HitInfo> RaycastHits = new List<MyPhysics.HitInfo>(32);
@@ -95,6 +105,8 @@ internal static class AutoLandingPlanner
             return false;
         }
 
+        List<Vector3D> hullLocalSamplePoints = CollectHullLocalSamplePoints(grid, hardpoints);
+
         MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
         Vector3D anchorLocalPosition = GetAnchorLocalPosition(hardpoints);
         Vector3D currentAnchorWorldPosition = Vector3D.Transform(anchorLocalPosition, currentGridMatrix);
@@ -111,6 +123,7 @@ internal static class AutoLandingPlanner
                 referenceRight,
                 hardpoints,
                 gears,
+                hullLocalSamplePoints,
                 out plan))
         {
             error = "AutoDock: cannot resolve landing pose.";
@@ -224,6 +237,7 @@ internal static class AutoLandingPlanner
         Vector3D referenceRight,
         IReadOnlyList<HardpointData> hardpoints,
         IReadOnlyList<MyLandingGear> gears,
+        IReadOnlyList<Vector3D> hullLocalSamplePoints,
         out AutoLandingPlan plan)
     {
         plan = null;
@@ -244,6 +258,7 @@ internal static class AutoLandingPlanner
                         referenceRight,
                         hardpoints,
                         gears,
+                        hullLocalSamplePoints,
                         0,
                         out LandingPlanCandidate zeroYawCandidate)
                     && (bestCandidate == null || IsBetterPlanCandidate(zeroYawCandidate, bestCandidate)))
@@ -266,6 +281,7 @@ internal static class AutoLandingPlanner
                     referenceRight,
                     hardpoints,
                     gears,
+                    hullLocalSamplePoints,
                     yawOffsetDegrees,
                     out LandingPlanCandidate positiveYawCandidate)
                 && (bestCandidate == null || IsBetterPlanCandidate(positiveYawCandidate, bestCandidate)))
@@ -285,6 +301,7 @@ internal static class AutoLandingPlanner
                     referenceRight,
                     hardpoints,
                     gears,
+                    hullLocalSamplePoints,
                     -yawOffsetDegrees,
                     out LandingPlanCandidate negativeYawCandidate)
                 && (bestCandidate == null || IsBetterPlanCandidate(negativeYawCandidate, bestCandidate)))
@@ -312,6 +329,7 @@ internal static class AutoLandingPlanner
         Vector3D referenceRight,
         IReadOnlyList<HardpointData> hardpoints,
         IReadOnlyList<MyLandingGear> gears,
+        IReadOnlyList<Vector3D> hullLocalSamplePoints,
         int yawOffsetDegrees,
         out LandingPlanCandidate candidate)
     {
@@ -399,6 +417,7 @@ internal static class AutoLandingPlanner
             upDirection,
             downDirection,
             samples,
+            hullLocalSamplePoints,
             out List<LandingHullClearanceSample> hullClearanceSamples,
             out double minHullClearance,
             out bool hullClearanceOk,
@@ -614,40 +633,25 @@ internal static class AutoLandingPlanner
         Vector3D upDirection,
         Vector3D downDirection,
         IReadOnlyList<LandingHardpointSample> hardpoints,
+        IReadOnlyList<Vector3D> hullLocalSamplePoints,
         out List<LandingHullClearanceSample> hullClearanceSamples,
         out double minHullClearance,
         out bool hullClearanceOk,
         out int hullIntersectionCount)
     {
-        hullClearanceSamples = new List<LandingHullClearanceSample>(13);
+        IReadOnlyList<Vector3D> localSamples = hullLocalSamplePoints;
+        if (localSamples == null || localSamples.Count == 0)
+            localSamples = CollectAabbHullSamplePoints(grid);
+
+        hullClearanceSamples = new List<LandingHullClearanceSample>(localSamples.Count);
         minHullClearance = double.PositiveInfinity;
         hullClearanceOk = true;
         hullIntersectionCount = 0;
         double readyLockCushion = GetLandingGearReadyCushion(hardpoints);
-        BoundingBox localAabb = grid.PositionComp.LocalAABB;
-        Vector3 min = localAabb.Min;
-        Vector3 max = localAabb.Max;
-        Vector3 center = localAabb.Center;
-        var samples = new List<Vector3D>(13)
-        {
-            new Vector3D(min.X, min.Y, min.Z),
-            new Vector3D(min.X, min.Y, max.Z),
-            new Vector3D(min.X, max.Y, min.Z),
-            new Vector3D(min.X, max.Y, max.Z),
-            new Vector3D(max.X, min.Y, min.Z),
-            new Vector3D(max.X, min.Y, max.Z),
-            new Vector3D(max.X, max.Y, min.Z),
-            new Vector3D(max.X, max.Y, max.Z),
-            new Vector3D(center.X, min.Y, center.Z),
-            new Vector3D(min.X, min.Y, center.Z),
-            new Vector3D(max.X, min.Y, center.Z),
-            new Vector3D(center.X, min.Y, min.Z),
-            new Vector3D(center.X, min.Y, max.Z)
-        };
 
-        for (int i = 0; i < samples.Count; i++)
+        for (int i = 0; i < localSamples.Count; i++)
         {
-            Vector3D sampleWorldPosition = Vector3D.Transform(samples[i], targetGridMatrix);
+            Vector3D sampleWorldPosition = Vector3D.Transform(localSamples[i], targetGridMatrix);
             bool isNearHardpoint = IsNearHardpoint(sampleWorldPosition, hardpoints);
             bool isInsideVoxel = MyEntities.IsInsideVoxel(
                 sampleWorldPosition,
@@ -687,6 +691,254 @@ internal static class AutoLandingPlanner
                 isNearHardpoint,
                 violatesClearance));
         }
+    }
+
+    private static List<Vector3D> CollectHullLocalSamplePoints(MyCubeGrid grid, IReadOnlyList<HardpointData> hardpoints)
+    {
+        if (TryCollectHullFaceRectangles(grid, hardpoints, out List<HullFaceRectangle> rectangles) && rectangles.Count > 0)
+        {
+            List<Vector3D> blockHullSamples = BuildHullSamplesFromRectangles(grid.GridSize, rectangles);
+            if (blockHullSamples.Count > 0)
+                return blockHullSamples;
+        }
+
+        return CollectAabbHullSamplePoints(grid);
+    }
+
+    private static bool TryCollectHullFaceRectangles(
+        MyCubeGrid grid,
+        IReadOnlyList<HardpointData> hardpoints,
+        out List<HullFaceRectangle> rectangles)
+    {
+        rectangles = new List<HullFaceRectangle>();
+        if (grid == null || grid.GridSize <= 0f)
+            return false;
+
+        double bandUpperLocalY = GetHullBandUpperLocalY(grid, hardpoints);
+        var layerFaces = new Dictionary<int, HashSet<Vector2I>>();
+        foreach (MySlimBlock block in grid.GetBlocks())
+        {
+            if (block == null)
+                continue;
+
+            Vector3I min = block.Min;
+            Vector3I max = block.Max;
+            for (int y = min.Y; y <= max.Y; y++)
+            {
+                double bottomFaceLocalY = (y - 0.5) * grid.GridSize;
+                if (bottomFaceLocalY > bandUpperLocalY + 1e-6)
+                    continue;
+
+                for (int x = min.X; x <= max.X; x++)
+                {
+                    for (int z = min.Z; z <= max.Z; z++)
+                    {
+                        if (grid.CubeExists(new Vector3I(x, y - 1, z)))
+                            continue;
+
+                        if (!layerFaces.TryGetValue(y, out HashSet<Vector2I> faces))
+                        {
+                            faces = new HashSet<Vector2I>();
+                            layerFaces.Add(y, faces);
+                        }
+
+                        faces.Add(new Vector2I(x, z));
+                    }
+                }
+            }
+        }
+
+        if (layerFaces.Count == 0)
+            return false;
+
+        var sortedLayers = new List<int>(layerFaces.Keys);
+        sortedLayers.Sort();
+        for (int i = 0; i < sortedLayers.Count; i++)
+            MergeHullFaceLayerRectangles(sortedLayers[i], layerFaces[sortedLayers[i]], rectangles);
+        return rectangles.Count > 0;
+    }
+
+    private static double GetHullBandUpperLocalY(MyCubeGrid grid, IReadOnlyList<HardpointData> hardpoints)
+    {
+        double minSupportLocalY = double.PositiveInfinity;
+        for (int i = 0; i < hardpoints.Count; i++)
+        {
+            double supportLocalY = hardpoints[i].LocalPosition.Y - GetReadyLockDistanceLocal(hardpoints[i]);
+            if (supportLocalY < minSupportLocalY)
+                minSupportLocalY = supportLocalY;
+        }
+
+        if (double.IsInfinity(minSupportLocalY))
+            return grid.PositionComp?.LocalAABB.Max.Y ?? 0.0;
+
+        return minSupportLocalY + grid.GridSize * AutoDockConstants.AutoLandingHullBlockLayerCount;
+    }
+
+    private static double GetReadyLockDistanceLocal(HardpointData hardpoint)
+    {
+        return
+            Math.Abs(hardpoint.LocalLockMatrix.Right.Y) * hardpoint.HalfExtents.X
+            + Math.Abs(hardpoint.LocalLockMatrix.Up.Y) * hardpoint.HalfExtents.Y
+            + Math.Abs(hardpoint.LocalLockMatrix.Forward.Y) * hardpoint.HalfExtents.Z;
+    }
+
+    private static void MergeHullFaceLayerRectangles(int y, HashSet<Vector2I> layerFaces, List<HullFaceRectangle> rectangles)
+    {
+        while (TryGetNextHullFaceCell(layerFaces, out Vector2I seed))
+        {
+            int minX = seed.X;
+            int maxX = seed.X;
+            int minZ = seed.Y;
+            int maxZ = seed.Y;
+
+            while (layerFaces.Contains(new Vector2I(maxX + 1, minZ)))
+                maxX++;
+
+            bool extendForward = true;
+            while (extendForward)
+            {
+                int nextZ = maxZ + 1;
+                for (int x = minX; x <= maxX; x++)
+                {
+                    if (!layerFaces.Contains(new Vector2I(x, nextZ)))
+                    {
+                        extendForward = false;
+                        break;
+                    }
+                }
+
+                if (extendForward)
+                    maxZ = nextZ;
+            }
+
+            for (int z = minZ; z <= maxZ; z++)
+            {
+                for (int x = minX; x <= maxX; x++)
+                    layerFaces.Remove(new Vector2I(x, z));
+            }
+
+            rectangles.Add(new HullFaceRectangle
+            {
+                Y = y,
+                MinX = minX,
+                MaxX = maxX,
+                MinZ = minZ,
+                MaxZ = maxZ
+            });
+        }
+    }
+
+    private static bool TryGetNextHullFaceCell(HashSet<Vector2I> layerFaces, out Vector2I cell)
+    {
+        cell = default;
+        if (layerFaces == null || layerFaces.Count == 0)
+            return false;
+
+        bool found = false;
+        foreach (Vector2I candidate in layerFaces)
+        {
+            if (!found || candidate.Y < cell.Y || (candidate.Y == cell.Y && candidate.X < cell.X))
+            {
+                cell = candidate;
+                found = true;
+            }
+        }
+
+        return found;
+    }
+
+    private static List<Vector3D> BuildHullSamplesFromRectangles(float gridSize, IReadOnlyList<HullFaceRectangle> rectangles)
+    {
+        int maxRectangleSpan = 1;
+        for (int i = 0; i < rectangles.Count; i++)
+        {
+            int widthCells = rectangles[i].MaxX - rectangles[i].MinX + 1;
+            int depthCells = rectangles[i].MaxZ - rectangles[i].MinZ + 1;
+            maxRectangleSpan = Math.Max(maxRectangleSpan, Math.Max(widthCells, depthCells));
+        }
+
+        int sampleStrideCells = Math.Max(1, AutoDockConstants.AutoLandingHullSampleStrideCells);
+        while (true)
+        {
+            var sampleKeys = new HashSet<Vector3I>();
+            var samples = new List<Vector3D>(rectangles.Count * 9);
+            for (int i = 0; i < rectangles.Count; i++)
+                AppendHullRectangleSamples(rectangles[i], gridSize, sampleStrideCells, sampleKeys, samples);
+
+            if (samples.Count <= AutoDockConstants.AutoLandingHullMaxSamples || sampleStrideCells >= maxRectangleSpan)
+                return samples;
+
+            sampleStrideCells++;
+        }
+    }
+
+    private static void AppendHullRectangleSamples(
+        HullFaceRectangle rectangle,
+        float gridSize,
+        int sampleStrideCells,
+        HashSet<Vector3I> sampleKeys,
+        List<Vector3D> samples)
+    {
+        int widthCells = rectangle.MaxX - rectangle.MinX + 1;
+        int depthCells = rectangle.MaxZ - rectangle.MinZ + 1;
+        int xSegments = Math.Max(1, (widthCells + sampleStrideCells - 1) / sampleStrideCells);
+        int zSegments = Math.Max(1, (depthCells + sampleStrideCells - 1) / sampleStrideCells);
+
+        double minX = (rectangle.MinX - 0.5) * gridSize;
+        double maxX = (rectangle.MaxX + 0.5) * gridSize;
+        double y = (rectangle.Y - 0.5) * gridSize;
+        double minZ = (rectangle.MinZ - 0.5) * gridSize;
+        double maxZ = (rectangle.MaxZ + 0.5) * gridSize;
+        for (int xIndex = 0; xIndex <= xSegments; xIndex++)
+        {
+            double x = minX + (maxX - minX) * xIndex / xSegments;
+            for (int zIndex = 0; zIndex <= zSegments; zIndex++)
+            {
+                double z = minZ + (maxZ - minZ) * zIndex / zSegments;
+                AddHullSamplePoint(new Vector3D(x, y, z), gridSize, sampleKeys, samples);
+            }
+        }
+
+        AddHullSamplePoint(new Vector3D((minX + maxX) * 0.5, y, (minZ + maxZ) * 0.5), gridSize, sampleKeys, samples);
+    }
+
+    private static void AddHullSamplePoint(Vector3D localPoint, float gridSize, HashSet<Vector3I> sampleKeys, List<Vector3D> samples)
+    {
+        double halfGrid = gridSize * 0.5;
+        var key = new Vector3I(
+            (int)Math.Round(localPoint.X / halfGrid),
+            (int)Math.Round(localPoint.Y / halfGrid),
+            (int)Math.Round(localPoint.Z / halfGrid));
+        if (!sampleKeys.Add(key))
+            return;
+
+        samples.Add(localPoint);
+    }
+
+    private static List<Vector3D> CollectAabbHullSamplePoints(MyCubeGrid grid)
+    {
+        var samples = new List<Vector3D>(13);
+        if (grid?.PositionComp == null)
+            return samples;
+
+        BoundingBox localAabb = grid.PositionComp.LocalAABB;
+        Vector3 min = localAabb.Min;
+        Vector3 max = localAabb.Max;
+        Vector3 center = localAabb.Center;
+        samples.Add(new Vector3D(min.X, min.Y, min.Z));
+        samples.Add(new Vector3D(min.X, min.Y, max.Z));
+        samples.Add(new Vector3D(min.X, max.Y, min.Z));
+        samples.Add(new Vector3D(min.X, max.Y, max.Z));
+        samples.Add(new Vector3D(max.X, min.Y, min.Z));
+        samples.Add(new Vector3D(max.X, min.Y, max.Z));
+        samples.Add(new Vector3D(max.X, max.Y, min.Z));
+        samples.Add(new Vector3D(max.X, max.Y, max.Z));
+        samples.Add(new Vector3D(center.X, min.Y, center.Z));
+        samples.Add(new Vector3D(min.X, min.Y, center.Z));
+        samples.Add(new Vector3D(max.X, min.Y, center.Z));
+        samples.Add(new Vector3D(center.X, min.Y, min.Z));
+        samples.Add(new Vector3D(center.X, min.Y, max.Z));
+        return samples;
     }
 
     private static double GetReadyLockDistance(HardpointData hardpoint, MatrixD targetGridMatrix, Vector3D upDirection)
