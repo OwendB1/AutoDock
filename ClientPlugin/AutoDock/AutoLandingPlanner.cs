@@ -11,11 +11,6 @@ namespace ClientPlugin;
 
 internal static class AutoLandingPlanner
 {
-    private const int CoarseAngleStepDegrees = 15;
-    private const int FineAngleSeedCount = 3;
-    private const int FineAngleRadiusDegrees = 7;
-    private const int FineAngleStepDegrees = 1;
-
     private sealed class HardpointData
     {
         public MyLandingGear Gear;
@@ -42,7 +37,7 @@ internal static class AutoLandingPlanner
     {
         public AutoLandingPlan Plan;
         public double PositiveGapSum;
-        public int AngleDegrees;
+        public int YawOffsetDegrees;
     }
 
     private static readonly List<MyPhysics.HitInfo> RaycastHits = new List<MyPhysics.HitInfo>(32);
@@ -228,50 +223,12 @@ internal static class AutoLandingPlanner
         out AutoLandingPlan plan)
     {
         plan = null;
-        var coarseCandidates = new List<LandingPlanCandidate>(360 / CoarseAngleStepDegrees);
-        var candidateAngles = new HashSet<int>();
         LandingPlanCandidate bestCandidate = null;
-        for (int angleDegrees = 0; angleDegrees < 360; angleDegrees += CoarseAngleStepDegrees)
+        for (int yawOffsetDegrees = 0; yawOffsetDegrees <= AutoDockConstants.AutoLandingMaxYawDegrees; yawOffsetDegrees++)
         {
-            if (!TryCreateCandidatePlan(
-                    grid,
-                    currentGridMatrix,
-                    anchorLocalPosition,
-                    currentAnchorWorldPosition,
-                    targetUpDirection,
-                    upDirection,
-                    downDirection,
-                    referenceForward,
-                    referenceRight,
-                    hardpoints,
-                    gears,
-                    angleDegrees,
-                    out LandingPlanCandidate candidate))
+            if (yawOffsetDegrees == 0)
             {
-                continue;
-            }
-
-            coarseCandidates.Add(candidate);
-            candidateAngles.Add(candidate.AngleDegrees);
-            if (bestCandidate == null || IsBetterPlanCandidate(candidate, bestCandidate))
-                bestCandidate = candidate;
-        }
-
-        if (coarseCandidates.Count == 0)
-            return false;
-
-        coarseCandidates.Sort(ComparePlanCandidates);
-        int seedCount = Math.Min(FineAngleSeedCount, coarseCandidates.Count);
-        for (int i = 0; i < seedCount; i++)
-        {
-            int seedAngleDegrees = coarseCandidates[i].AngleDegrees;
-            for (int offsetDegrees = -FineAngleRadiusDegrees; offsetDegrees <= FineAngleRadiusDegrees; offsetDegrees += FineAngleStepDegrees)
-            {
-                int angleDegrees = NormalizeAngleDegrees(seedAngleDegrees + offsetDegrees);
-                if (candidateAngles.Contains(angleDegrees))
-                    continue;
-
-                if (!TryCreateCandidatePlan(
+                if (TryCreateCandidatePlan(
                         grid,
                         currentGridMatrix,
                         anchorLocalPosition,
@@ -283,15 +240,52 @@ internal static class AutoLandingPlanner
                         referenceRight,
                         hardpoints,
                         gears,
-                        angleDegrees,
-                        out LandingPlanCandidate candidate))
+                        0,
+                        out LandingPlanCandidate zeroYawCandidate)
+                    && (bestCandidate == null || IsBetterPlanCandidate(zeroYawCandidate, bestCandidate)))
                 {
-                    continue;
+                    bestCandidate = zeroYawCandidate;
                 }
 
-                candidateAngles.Add(candidate.AngleDegrees);
-                if (bestCandidate == null || IsBetterPlanCandidate(candidate, bestCandidate))
-                    bestCandidate = candidate;
+                continue;
+            }
+
+            if (TryCreateCandidatePlan(
+                    grid,
+                    currentGridMatrix,
+                    anchorLocalPosition,
+                    currentAnchorWorldPosition,
+                    targetUpDirection,
+                    upDirection,
+                    downDirection,
+                    referenceForward,
+                    referenceRight,
+                    hardpoints,
+                    gears,
+                    yawOffsetDegrees,
+                    out LandingPlanCandidate positiveYawCandidate)
+                && (bestCandidate == null || IsBetterPlanCandidate(positiveYawCandidate, bestCandidate)))
+            {
+                bestCandidate = positiveYawCandidate;
+            }
+
+            if (TryCreateCandidatePlan(
+                    grid,
+                    currentGridMatrix,
+                    anchorLocalPosition,
+                    currentAnchorWorldPosition,
+                    targetUpDirection,
+                    upDirection,
+                    downDirection,
+                    referenceForward,
+                    referenceRight,
+                    hardpoints,
+                    gears,
+                    -yawOffsetDegrees,
+                    out LandingPlanCandidate negativeYawCandidate)
+                && (bestCandidate == null || IsBetterPlanCandidate(negativeYawCandidate, bestCandidate)))
+            {
+                bestCandidate = negativeYawCandidate;
             }
         }
 
@@ -314,11 +308,11 @@ internal static class AutoLandingPlanner
         Vector3D referenceRight,
         IReadOnlyList<HardpointData> hardpoints,
         IReadOnlyList<MyLandingGear> gears,
-        int angleDegrees,
+        int yawOffsetDegrees,
         out LandingPlanCandidate candidate)
     {
         candidate = null;
-        MatrixD targetGridMatrix = CreateTargetGridMatrix(targetUpDirection, referenceForward, referenceRight, angleDegrees * Math.PI / 180.0);
+        MatrixD targetGridMatrix = CreateTargetGridMatrix(targetUpDirection, referenceForward, referenceRight, yawOffsetDegrees * Math.PI / 180.0);
         Vector3D targetAnchorNoTranslation = Vector3D.Transform(anchorLocalPosition, targetGridMatrix);
         Vector3D provisionalTranslation = currentAnchorWorldPosition - targetAnchorNoTranslation;
 
@@ -423,20 +417,9 @@ internal static class AutoLandingPlanner
                 hullClearanceOk,
                 hullIntersectionCount),
             PositiveGapSum = positiveGapSum,
-            AngleDegrees = NormalizeAngleDegrees(angleDegrees)
+            YawOffsetDegrees = yawOffsetDegrees
         };
         return true;
-    }
-
-    private static int ComparePlanCandidates(LandingPlanCandidate left, LandingPlanCandidate right)
-    {
-        if (IsBetterPlanCandidate(left, right))
-            return -1;
-
-        if (IsBetterPlanCandidate(right, left))
-            return 1;
-
-        return 0;
     }
 
     private static bool IsBetterPlanCandidate(LandingPlanCandidate candidate, LandingPlanCandidate currentBest)
@@ -450,9 +433,6 @@ internal static class AutoLandingPlanner
         if (candidate.Plan.ExpectedReadyHardpointCount != currentBest.Plan.ExpectedReadyHardpointCount)
             return candidate.Plan.ExpectedReadyHardpointCount > currentBest.Plan.ExpectedReadyHardpointCount;
 
-        if (Math.Abs(candidate.PositiveGapSum - currentBest.PositiveGapSum) > 1e-6)
-            return candidate.PositiveGapSum < currentBest.PositiveGapSum;
-
         bool candidateInfiniteClearance = double.IsInfinity(candidate.Plan.MinHullClearance);
         bool currentInfiniteClearance = double.IsInfinity(currentBest.Plan.MinHullClearance);
         if (candidateInfiniteClearance != currentInfiniteClearance)
@@ -461,28 +441,20 @@ internal static class AutoLandingPlanner
         if (!candidateInfiniteClearance && Math.Abs(candidate.Plan.MinHullClearance - currentBest.Plan.MinHullClearance) > 1e-6)
             return candidate.Plan.MinHullClearance > currentBest.Plan.MinHullClearance;
 
-        int candidateAngleDistanceDegrees = GetAngleDistanceDegrees(candidate.AngleDegrees);
-        int currentAngleDistanceDegrees = GetAngleDistanceDegrees(currentBest.AngleDegrees);
-        if (candidateAngleDistanceDegrees != currentAngleDistanceDegrees)
-            return candidateAngleDistanceDegrees < currentAngleDistanceDegrees;
+        int candidateYawDistanceDegrees = GetYawDistanceDegrees(candidate.YawOffsetDegrees);
+        int currentYawDistanceDegrees = GetYawDistanceDegrees(currentBest.YawOffsetDegrees);
+        if (candidateYawDistanceDegrees != currentYawDistanceDegrees)
+            return candidateYawDistanceDegrees < currentYawDistanceDegrees;
+
+        if (Math.Abs(candidate.PositiveGapSum - currentBest.PositiveGapSum) > 1e-6)
+            return candidate.PositiveGapSum < currentBest.PositiveGapSum;
 
         return candidate.Plan.AnchorDistance < currentBest.Plan.AnchorDistance;
     }
 
-    private static int NormalizeAngleDegrees(int angleDegrees)
+    private static int GetYawDistanceDegrees(int yawOffsetDegrees)
     {
-        int normalizedAngleDegrees = angleDegrees % 360;
-        if (normalizedAngleDegrees < 0)
-            normalizedAngleDegrees += 360;
-        return normalizedAngleDegrees;
-    }
-
-    private static int GetAngleDistanceDegrees(int angleDegrees)
-    {
-        int normalizedAngleDegrees = NormalizeAngleDegrees(angleDegrees);
-        return normalizedAngleDegrees <= 180
-            ? normalizedAngleDegrees
-            : 360 - normalizedAngleDegrees;
+        return Math.Abs(yawOffsetDegrees);
     }
 
     private static Vector3D GetTargetUpDirection(
