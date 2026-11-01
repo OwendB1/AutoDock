@@ -31,7 +31,18 @@ internal sealed class AutoDockController
     public void Update()
     {
         AutoDockControlOverride.BeginFrame();
+        try
+        {
+            UpdateCore();
+        }
+        finally
+        {
+            AutoDockControlOverride.EndFrame();
+        }
+    }
 
+    private void UpdateCore()
+    {
         if (MySession.Static == null)
         {
             ResetSessionState();
@@ -130,7 +141,7 @@ internal sealed class AutoDockController
             if (pairCatalog.PairCount == 0)
             {
                 ClearDockSelection();
-                Notify($"AutoDock: no connector pairs within {AutoDockConstants.SoftSelectRadius:0.#} m.", "Red");
+                Notify($"AutoDock: no connector pairs within {AutoDockConstants.GetSoftSelectRadius(MySession.Static?.ControlledGrid):0.#} m.", "Red");
                 DrawSelections();
                 return;
             }
@@ -180,7 +191,7 @@ internal sealed class AutoDockController
         if (pairCatalog.PairCount == 0)
         {
             ClearDockSelection();
-            Notify($"AutoDock: no connector pairs within {AutoDockConstants.SoftSelectRadius:0.#} m.", "Red");
+            Notify($"AutoDock: no connector pairs within {AutoDockConstants.GetSoftSelectRadius(MySession.Static?.ControlledGrid):0.#} m.", "Red");
             return;
         }
 
@@ -201,7 +212,7 @@ internal sealed class AutoDockController
         pair.RefreshMetrics();
         if (!pair.InRange)
         {
-            Notify($"AutoDock: selected pair is {pair.Distance:0.0} m away. Move within {AutoDockConstants.GetSearchRadius():0.#} m.", "Red");
+            Notify($"AutoDock: selected pair is {pair.Distance:0.0} m away. Move within {AutoDockConstants.GetSearchRadius(pair.Local.CubeGrid):0.#} m.", "Red");
             return;
         }
 
@@ -389,7 +400,7 @@ internal sealed class AutoDockController
             ? "lock ready"
             : pair.InRange
                 ? "in range"
-                : $"outside {AutoDockConstants.GetSearchRadius():0.#} m range";
+                : $"outside {AutoDockConstants.GetSearchRadius(pair.Local.CubeGrid):0.#} m range";
         lockRotationService.TryGetRotationStep(pair, out int rotationStep);
         int angleDegrees = DockingMath.TryGetOrientationAngleDegrees(pair, rotationStep, out int projectedAngleDegrees)
             ? projectedAngleDegrees

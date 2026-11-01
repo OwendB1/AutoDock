@@ -18,7 +18,7 @@ internal sealed class DockingPair
         Target = target;
         HasRememberedRotation = hasRememberedRotation;
         Distance = distance;
-        InRange = DockingMath.IsWithinSearchRange(distance);
+        InRange = DockingMath.IsWithinSearchRange(Local?.CubeGrid, distance);
         LockReady = lockReady;
     }
 
@@ -33,7 +33,7 @@ internal sealed class DockingPair
         Distance = Vector3D.Distance(
             DockingMath.GetConnectorReferencePosition(Local),
             DockingMath.GetConnectorReferencePosition(Target));
-        InRange = DockingMath.IsWithinSearchRange(Distance);
+        InRange = DockingMath.IsWithinSearchRange(Local.CubeGrid, Distance);
         LockReady = DockingMath.IsLockReady(Local, Target);
     }
 }

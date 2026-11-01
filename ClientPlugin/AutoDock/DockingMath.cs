@@ -155,6 +155,7 @@ internal static class DockingMath
         double orientationErrorMagnitude = GetOrientationErrorVector(currentGridMatrix, targetOrientation).Length();
         Vector3D targetConstraintPosition = GetApproachConstraintPosition(
             pair.Target,
+            AutoDockConstants.GetFinalApproachDistance(grid),
             currentConstraintPosition,
             finalConstraintPosition,
             orientationErrorMagnitude,
@@ -237,17 +238,19 @@ internal static class DockingMath
         double maxLinearAcceleration = target.FinalApproachActive
             ? AutoDockConstants.AutoDockFinalApproachMaxLinearAcceleration
             : AutoDockConstants.AutoDockMaxLinearAcceleration;
+        LinearThrustControl thrustControl = GetLinearThrustControl(controller);
 
         Vector3D desiredWorldAcceleration = GetDesiredWorldAcceleration(
             pair.Target,
             positionError,
             positionErrorIntegral,
             errorVelocity,
+            thrustControl,
             maxLinearAcceleration,
             target.FinalApproachActive);
         desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
         Vector3 moveIndicator = allowTranslation
-            ? CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix, maxLinearAcceleration)
+            ? thrustControl.CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix)
             : Vector3.Zero;
 
         orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
@@ -271,7 +274,7 @@ internal static class DockingMath
             out Vector2 rotationIndicator,
             out float rollIndicator);
 
-        AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator);
+        AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator, allowTranslation);
     }
 
     public static void ApplyGridAlignmentControl(
@@ -311,13 +314,15 @@ internal static class DockingMath
 
         positionErrorIntegral = ClampVectorMagnitude(positionErrorIntegral, AutoDockConstants.AutoDockLinearIntegralLimit);
 
+        LinearThrustControl thrustControl = GetLinearThrustControl(controller);
         Vector3D desiredWorldAcceleration = GetStabilizedAcceleration(
             positionError,
             positionErrorIntegral,
             errorVelocity,
+            thrustControl,
             maxLinearAcceleration);
         desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
-        Vector3 moveIndicator = CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix, maxLinearAcceleration);
+        Vector3 moveIndicator = thrustControl.CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix);
 
         orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
         orientationErrorIntegral = ClampVectorMagnitude(orientationErrorIntegral, AutoDockConstants.AutoDockAngularIntegralLimit);
@@ -357,9 +362,9 @@ internal static class DockingMath
         }
     }
 
-    public static bool IsWithinSearchRange(double distance)
+    public static bool IsWithinSearchRange(MyCubeGrid grid, double distance)
     {
-        return distance <= AutoDockConstants.GetSearchRadius();
+        return distance <= AutoDockConstants.GetSearchRadius(grid);
     }
 
     public static Vector3D GetConnectorReferencePosition(MyShipConnector connector)
@@ -534,6 +539,7 @@ internal static class DockingMath
 
     private static Vector3D GetApproachConstraintPosition(
         MyShipConnector targetConnector,
+        double finalApproachDistance,
         Vector3D currentConstraintPosition,
         Vector3D finalConstraintPosition,
         double orientationErrorMagnitude,
@@ -552,16 +558,16 @@ internal static class DockingMath
         double axialDistance = Math.Abs(signedAxialOffset);
         bool finalApproachReady =
             finalApproachStarted
-            || (axialDistance <= AutoDockConstants.AutoDockFinalApproachDistance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance
+            || (axialDistance <= finalApproachDistance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance
                 && planarPositionError.LengthSquared()
                 <= AutoDockConstants.AutoDockFinalApproachPlanarTolerance * AutoDockConstants.AutoDockFinalApproachPlanarTolerance
                 && orientationErrorMagnitude <= AutoDockConstants.AutoDockFinalApproachOrientationThreshold);
 
         finalApproachActive = finalApproachReady;
-        // Hold staging point 2 m out on same side of connector as ship until lateral alignment is done.
+        // Hold staging point on same side of connector as ship until lateral alignment is done.
         return finalApproachReady
             ? finalConstraintPosition
-            : finalConstraintPosition + approachAxis * (approachSign * AutoDockConstants.AutoDockFinalApproachDistance);
+            : finalConstraintPosition + approachAxis * (approachSign * finalApproachDistance);
     }
 
     private static bool IsFacingTowards(MyShipConnector connector, Vector3D otherConnectorPosition)
@@ -790,12 +796,13 @@ internal static class DockingMath
         Vector3D positionError,
         Vector3D positionErrorIntegral,
         Vector3D errorVelocity,
+        LinearThrustControl thrustControl,
         double maxLinearAcceleration,
         bool finalApproachActive)
     {
         if (!TryGetDockingApproachAxis(targetConnector, out Vector3D approachAxis))
         {
-            return GetStabilizedAcceleration(positionError, positionErrorIntegral, errorVelocity, maxLinearAcceleration);
+            return GetStabilizedAcceleration(positionError, positionErrorIntegral, errorVelocity, thrustControl, maxLinearAcceleration);
         }
 
         Vector3D axialPositionError = approachAxis * Vector3D.Dot(positionError, approachAxis);
@@ -808,15 +815,17 @@ internal static class DockingMath
                    axialPositionError,
                    axialIntegralError,
                    axialVelocityError,
+                   thrustControl,
                    maxLinearAcceleration,
                    enforceStoppingDistance: !finalApproachActive)
-               + GetStabilizedAcceleration(planarPositionError, planarIntegralError, planarVelocityError, maxLinearAcceleration);
+               + GetStabilizedAcceleration(planarPositionError, planarIntegralError, planarVelocityError, thrustControl, maxLinearAcceleration);
     }
 
     private static Vector3D GetStabilizedAcceleration(
         Vector3D positionError,
         Vector3D positionErrorIntegral,
         Vector3D errorVelocity,
+        LinearThrustControl thrustControl,
         double maxLinearAcceleration,
         bool enforceStoppingDistance = true)
     {
@@ -837,13 +846,14 @@ internal static class DockingMath
         double errorVelocityAlongError = Vector3D.Dot(errorVelocity, errorDirection);
         double closingSpeed = -errorVelocityAlongError;
         double stoppingDistance = Math.Max(0.0, distance - AutoDockConstants.AutoDockLinearBrakePadding);
-        double maxClosingSpeed = Math.Sqrt(2.0 * maxLinearAcceleration * stoppingDistance);
+        double brakingAcceleration = thrustControl.GetAvailableAcceleration(-errorDirection, maxLinearAcceleration);
+        double maxClosingSpeed = Math.Sqrt(2.0 * brakingAcceleration * stoppingDistance);
         if (closingSpeed <= maxClosingSpeed)
             return desiredAcceleration;
 
         // Too much closing speed for remaining distance. Spend full authority on braking.
         Vector3D lateralAcceleration = desiredAcceleration - errorDirection * Vector3D.Dot(desiredAcceleration, errorDirection);
-        return lateralAcceleration - errorDirection * maxLinearAcceleration;
+        return lateralAcceleration - errorDirection * brakingAcceleration;
     }
 
     private static bool TryGetDockingApproachAxis(MyShipConnector targetConnector, out Vector3D approachAxis)
@@ -923,20 +933,24 @@ internal static class DockingMath
         return connectorFaceWorldMatrix.IsValid();
     }
 
-    private static Vector3 CreateMoveIndicator(
-        Vector3D desiredWorldAcceleration,
-        MatrixD inverseControllerMatrix,
-        double maxLinearAcceleration)
+    private static LinearThrustControl GetLinearThrustControl(MyShipController controller)
     {
-        if (maxLinearAcceleration <= 0.0)
-            return Vector3.Zero;
-
-        Vector3D desiredControllerAcceleration = Vector3D.TransformNormal(desiredWorldAcceleration, inverseControllerMatrix);
-        Vector3 moveIndicator = new Vector3(
-            (float)(desiredControllerAcceleration.X / maxLinearAcceleration),
-            (float)(desiredControllerAcceleration.Y / maxLinearAcceleration),
-            (float)(desiredControllerAcceleration.Z / maxLinearAcceleration));
-        return Vector3.Clamp(moveIndicator, -Vector3.One, Vector3.One);
+        MyCubeGrid grid = controller.CubeGrid;
+        // The game's thrust accessor maps Forward to positive Z and Backward to negative Z.
+        Vector3D positiveThrust = new Vector3D(
+            grid.GetMaxThrustInDirection(Base6Directions.Direction.Right),
+            grid.GetMaxThrustInDirection(Base6Directions.Direction.Up),
+            grid.GetMaxThrustInDirection(Base6Directions.Direction.Forward));
+        Vector3D negativeThrust = new Vector3D(
+            grid.GetMaxThrustInDirection(Base6Directions.Direction.Left),
+            grid.GetMaxThrustInDirection(Base6Directions.Direction.Down),
+            grid.GetMaxThrustInDirection(Base6Directions.Direction.Backward));
+        return new LinearThrustControl(
+            controller.CalculateShipMass().PhysicalMass,
+            positiveThrust,
+            negativeThrust,
+            grid.Physics.Gravity,
+            grid.PositionComp.WorldMatrixNormalizedInv);
     }
 
     private static void CreateRotationInput(

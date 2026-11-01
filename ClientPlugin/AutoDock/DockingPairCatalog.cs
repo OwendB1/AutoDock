@@ -72,10 +72,11 @@ internal sealed class DockingPairCatalog
 
         availableLocalConnectors.Sort(CompareLocalConnectors);
 
+        float radius = AutoDockConstants.GetSoftSelectRadius(controlledGrid);
         foreach (MyShipConnector localConnector in availableLocalConnectors)
         {
             var connectorPairs = new List<DockingPair>();
-            AddPairsNear(localConnector, AutoDockConstants.SoftSelectRadius, connectorPairs);
+            AddPairsNear(localConnector, radius, connectorPairs);
             if (connectorPairs.Count == 0)
                 continue;
 

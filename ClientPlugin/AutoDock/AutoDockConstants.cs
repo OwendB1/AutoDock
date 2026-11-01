@@ -1,4 +1,5 @@
 using System;
+using Sandbox.Game.Entities;
 using VRageMath;
 
 namespace ClientPlugin;
@@ -59,13 +60,30 @@ internal static class AutoDockConstants
     public const double AutoLandingMaxLinearAcceleration = 1.5;
     public const double AutoLandingMaxAngularVelocity = 0.35;
 
-    public static float GetSearchRadius()
+    public static float GetSearchRadius(MyCubeGrid grid)
     {
         float radius = Config.Current.ConnectorSearchRadius;
         if (float.IsNaN(radius) || float.IsInfinity(radius))
             radius = 5f;
 
-        return MathHelper.Clamp(radius, MinSearchRadius, MaxSearchRadius);
+        radius = MathHelper.Clamp(radius, MinSearchRadius, MaxSearchRadius);
+        return Math.Max(radius, GetGridLength(grid));
+    }
+
+    public static float GetSoftSelectRadius(MyCubeGrid grid)
+    {
+        return Math.Max(SoftSelectRadius, GetSearchRadius(grid));
+    }
+
+    public static double GetFinalApproachDistance(MyCubeGrid grid)
+    {
+        return Math.Max(AutoDockFinalApproachDistance, GetGridLength(grid));
+    }
+
+    private static float GetGridLength(MyCubeGrid grid)
+    {
+        Vector3 size = grid?.PositionComp?.LocalAABB.Size ?? Vector3.Zero;
+        return Math.Max(size.X, Math.Max(size.Y, size.Z));
     }
 
     private static int GetPositiveInt(int value, int fallback, int minimum = 1)

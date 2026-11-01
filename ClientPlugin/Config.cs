@@ -53,7 +53,7 @@ public class Config : INotifyPropertyChanged
 
     [Separator("Docking")]
 
-    [Slider(1f, 30f, 0.5f, label: "Connector search radius", description: "Meters from each controlled-grid connector to scan for compatible connector pairs.")]
+    [Slider(1f, 30f, 0.5f, label: "Minimum docking range", description: "Minimum docking range in meters. AutoDock increases this to the controlled grid's longest dimension for larger ships.")]
     public float ConnectorSearchRadius
     {
         get => connectorSearchRadius;
@@ -201,7 +201,7 @@ public class Config : INotifyPropertyChanged
         set => SetField(ref autoDockFinalApproachMaxLinearAcceleration, value);
     }
 
-    [Slider(0.2f, 10f, 0.1f, label: "Distance", description: "How far out AutoDock waits at staging point before committing to straight-in final approach.")]
+    [Slider(0.2f, 10f, 0.1f, label: "Minimum distance", description: "Minimum staging distance in meters before straight-in final approach. AutoDock increases this to the controlled grid's longest dimension for larger ships.")]
     public double AutoDockFinalApproachDistance
     {
         get => autoDockFinalApproachDistance;
