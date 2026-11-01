@@ -204,7 +204,7 @@ internal static class DockingMath
 
     public static void ApplyAutoDockControl(
         ref Vector3D positionErrorIntegral,
-        ref Vector3D orientationErrorIntegral,
+        ref AngularPidControl angularControl,
         DockingPair pair,
         MyShipController controller,
         DockingTarget target,
@@ -253,33 +253,13 @@ internal static class DockingMath
             ? thrustControl.CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix)
             : Vector3.Zero;
 
-        orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
-        orientationErrorIntegral = ClampVectorMagnitude(orientationErrorIntegral, AutoDockConstants.AutoDockAngularIntegralLimit);
-
-        Vector3D angularVelocity = grid.Physics.AngularVelocity;
-        Vector3D desiredAngularVelocity =
-            orientationError * AutoDockConstants.AutoDockAngularProportionalGain
-            + orientationErrorIntegral * AutoDockConstants.AutoDockAngularIntegralGain;
-        desiredAngularVelocity = ClampVectorMagnitude(desiredAngularVelocity, AutoDockConstants.AutoDockMaxAngularVelocity);
-
-        Vector3D worldTorque = (desiredAngularVelocity - angularVelocity) * AutoDockConstants.AutoDockAngularVelocityGain;
-        float torqueLimit = MathHelper.Lerp(
-            AutoDockConstants.AutoDockAngularMinTorque,
-            AutoDockConstants.AutoDockAngularMaxTorque,
-            MathHelper.Clamp((float)(orientationError.Length() / AutoDockConstants.AutoDockAngularSofteningThreshold), 0f, 1f));
-        CreateRotationInput(
-            worldTorque,
-            inverseControllerMatrix,
-            torqueLimit,
-            out Vector2 rotationIndicator,
-            out float rollIndicator);
-
-        AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator, allowTranslation);
+        ApplyRotationControl(ref angularControl, grid, controller, moveIndicator, orientationError,
+            AutoDockConstants.AutoDockMaxAngularVelocity, allowTranslation);
     }
 
     public static void ApplyGridAlignmentControl(
         ref Vector3D positionErrorIntegral,
-        ref Vector3D orientationErrorIntegral,
+        ref AngularPidControl angularControl,
         MyCubeGrid grid,
         MyShipController controller,
         Vector3D currentAnchorPosition,
@@ -324,28 +304,7 @@ internal static class DockingMath
         desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
         Vector3 moveIndicator = thrustControl.CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix);
 
-        orientationErrorIntegral += orientationError * AutoDockConstants.AutoDockControlStepSeconds;
-        orientationErrorIntegral = ClampVectorMagnitude(orientationErrorIntegral, AutoDockConstants.AutoDockAngularIntegralLimit);
-
-        Vector3D angularVelocity = grid.Physics.AngularVelocity;
-        Vector3D desiredAngularVelocity =
-            orientationError * AutoDockConstants.AutoDockAngularProportionalGain
-            + orientationErrorIntegral * AutoDockConstants.AutoDockAngularIntegralGain;
-        desiredAngularVelocity = ClampVectorMagnitude(desiredAngularVelocity, maxAngularVelocity);
-
-        Vector3D worldTorque = (desiredAngularVelocity - angularVelocity) * AutoDockConstants.AutoDockAngularVelocityGain;
-        float torqueLimit = MathHelper.Lerp(
-            AutoDockConstants.AutoDockAngularMinTorque,
-            AutoDockConstants.AutoDockAngularMaxTorque,
-            MathHelper.Clamp((float)(orientationError.Length() / AutoDockConstants.AutoDockAngularSofteningThreshold), 0f, 1f));
-        CreateRotationInput(
-            worldTorque,
-            inverseControllerMatrix,
-            torqueLimit,
-            out Vector2 rotationIndicator,
-            out float rollIndicator);
-
-        AutoDockControlOverride.Set(controller, moveIndicator, rotationIndicator, rollIndicator);
+        ApplyRotationControl(ref angularControl, grid, controller, moveIndicator, orientationError, maxAngularVelocity);
     }
 
     public static void ReleaseShipControl(MyCubeGrid grid)
@@ -953,22 +912,33 @@ internal static class DockingMath
             grid.PositionComp.WorldMatrixNormalizedInv);
     }
 
-    private static void CreateRotationInput(
-        Vector3D desiredWorldTorque,
-        MatrixD inverseControllerMatrix,
-        float torqueLimit,
-        out Vector2 rotationIndicator,
-        out float rollIndicator)
+    private static void ApplyRotationControl(
+        ref AngularPidControl angularControl,
+        MyCubeGrid grid,
+        MyShipController controller,
+        Vector3 moveIndicator,
+        Vector3D orientationError,
+        double maxAngularVelocity,
+        bool controlTranslation = true)
     {
-        Vector3D desiredControllerTorqueD = Vector3D.TransformNormal(desiredWorldTorque, inverseControllerMatrix);
-        Vector3 desiredControllerTorque = new Vector3(
-            (float)desiredControllerTorqueD.X,
-            (float)desiredControllerTorqueD.Y,
-            (float)desiredControllerTorqueD.Z);
-        desiredControllerTorque = Vector3.ClampToSphere(desiredControllerTorque, torqueLimit);
+        if (!GyroVelocityControl.IsActive)
+            angularControl = default;
 
-        rotationIndicator = new Vector2(-desiredControllerTorque.X * 20f, -desiredControllerTorque.Y * 20f);
-        rollIndicator = -desiredControllerTorque.Z * 5f;
+        Vector3D angularVelocity = angularControl.Update(
+            orientationError,
+            grid.Physics.AngularVelocity,
+            AutoDockConstants.AutoDockControlStepSeconds,
+            AutoDockConstants.AutoDockAngularProportionalGain,
+            AutoDockConstants.AutoDockAngularIntegralGain,
+            AutoDockConstants.AutoDockAngularDerivativeGain,
+            AutoDockConstants.AutoDockAngularIntegralLimit,
+            maxAngularVelocity,
+            AutoDockConstants.AutoDockAngularVelocityGain);
+        float torqueLimit = MathHelper.Lerp(
+            AutoDockConstants.AutoDockAngularMinTorque,
+            AutoDockConstants.AutoDockAngularMaxTorque,
+            MathHelper.Clamp((float)(orientationError.Length() / AutoDockConstants.AutoDockAngularSofteningThreshold), 0f, 1f));
+        AutoDockControlOverride.Set(controller, moveIndicator, angularVelocity, torqueLimit, controlTranslation);
     }
 
     private static Vector3D GetOrientationErrorVector(MatrixD currentMatrix, MatrixD targetMatrix)

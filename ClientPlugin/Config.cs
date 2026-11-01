@@ -38,6 +38,7 @@ public class Config : INotifyPropertyChanged
     private double autoDockFinalApproachOrientationThreshold = 0.35;
     private double autoDockAngularProportionalGain = 2.0;
     private double autoDockAngularIntegralGain = 0.08;
+    private double autoDockAngularDerivativeGain = 0.5;
     private double autoDockAngularIntegralLimit = 0.35;
     private double autoDockMaxAngularVelocity = 0.65;
     private double autoDockAngularVelocityGain = 1.8;
@@ -243,6 +244,13 @@ public class Config : INotifyPropertyChanged
     {
         get => autoDockAngularIntegralGain;
         set => SetField(ref autoDockAngularIntegralGain, value);
+    }
+
+    [Slider(0f, 2f, 0.01f, label: "Derivative gain", description: "Damps rotation using the change in angle error per second. Higher reduces overshoot but can slow alignment.")]
+    public double AutoDockAngularDerivativeGain
+    {
+        get => autoDockAngularDerivativeGain;
+        set => SetField(ref autoDockAngularDerivativeGain, value);
     }
 
     [Slider(0f, 2f, 0.01f, label: "Integral limit", description: "Caps stored rotation correction so it does not build up too far.")]

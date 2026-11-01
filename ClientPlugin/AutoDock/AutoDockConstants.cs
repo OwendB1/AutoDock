@@ -29,6 +29,7 @@ internal static class AutoDockConstants
     public static double AutoDockFinalApproachOrientationThreshold => GetFiniteDouble(Config.Current.AutoDockFinalApproachOrientationThreshold, Config.Default.AutoDockFinalApproachOrientationThreshold, 0.0);
     public static double AutoDockAngularProportionalGain => GetFiniteDouble(Config.Current.AutoDockAngularProportionalGain, Config.Default.AutoDockAngularProportionalGain, 0.0);
     public static double AutoDockAngularIntegralGain => GetFiniteDouble(Config.Current.AutoDockAngularIntegralGain, Config.Default.AutoDockAngularIntegralGain, 0.0);
+    public static double AutoDockAngularDerivativeGain => GetFiniteDouble(Config.Current.AutoDockAngularDerivativeGain, Config.Default.AutoDockAngularDerivativeGain, 0.0);
     public static double AutoDockAngularIntegralLimit => GetFiniteDouble(Config.Current.AutoDockAngularIntegralLimit, Config.Default.AutoDockAngularIntegralLimit, 0.0);
     public static double AutoDockMaxAngularVelocity => GetFiniteDouble(Config.Current.AutoDockMaxAngularVelocity, Config.Default.AutoDockMaxAngularVelocity, 0.0001);
     public static double AutoDockAngularVelocityGain => GetFiniteDouble(Config.Current.AutoDockAngularVelocityGain, Config.Default.AutoDockAngularVelocityGain, 0.0001);

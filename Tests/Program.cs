@@ -3,7 +3,7 @@ using ClientPlugin;
 using Sandbox.Game.Entities;
 using VRageMath;
 
-internal static class Program
+internal static partial class Program
 {
     private static void Main()
     {
@@ -65,14 +65,16 @@ internal static class Program
         Check(insufficientLift.GetAvailableAcceleration(Vector3D.Up, 100), 0);
 
         CheckDampenersLifecycle();
-        Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, and dampener lifecycle passed.");
+        CheckAngularControl();
+        CheckGyroLifecycle();
+        Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, dampener lifecycle, angular PID, and gyro lifecycle passed.");
     }
 
     private static void CheckDampenersLifecycle()
     {
         var controller = new MyShipController { EntityId = 1, DampenersOverride = true };
         AutoDockControlOverride.BeginFrame();
-        AutoDockControlOverride.Set(controller, Vector3.One, Vector2.Zero, 0);
+        AutoDockControlOverride.Set(controller, Vector3.One, Vector3D.Zero, 0);
         AutoDockControlOverride.EndFrame();
         Require(!controller.DampenersOverride);
         Vector3 move = Vector3.Zero;
@@ -81,28 +83,28 @@ internal static class Program
         Require(AutoDockControlOverride.TryOverride(controller, ref move, ref rotation, ref roll));
         CheckVector(move, Vector3D.One);
         AutoDockControlOverride.BeginFrame();
-        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector2.Zero, 0);
+        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector3D.Zero, 0);
         AutoDockControlOverride.EndFrame();
         AutoDockControlOverride.Clear();
         Require(controller.DampenersOverride);
 
-        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector2.Zero, 0);
+        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector3D.Zero, 0);
         AutoDockControlOverride.BeginFrame();
         AutoDockControlOverride.EndFrame();
         Require(controller.DampenersOverride);
         Require(!AutoDockControlOverride.TryOverride(controller, ref move, ref rotation, ref roll));
 
-        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector2.Zero, 0);
-        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector2.Zero, 0, controlTranslation: false);
+        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector3D.Zero, 0);
+        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector3D.Zero, 0, controlTranslation: false);
         Require(controller.DampenersOverride);
-        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector2.Zero, 0);
+        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector3D.Zero, 0);
         var other = new MyShipController { EntityId = 2, DampenersOverride = false };
-        AutoDockControlOverride.Set(other, Vector3.Zero, Vector2.Zero, 0);
+        AutoDockControlOverride.Set(other, Vector3.Zero, Vector3D.Zero, 0);
         Require(controller.DampenersOverride && !other.DampenersOverride);
         AutoDockControlOverride.Clear();
         Require(!other.DampenersOverride);
-        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector2.Zero, 0);
-        AutoDockControlOverride.Set(null, Vector3.Zero, Vector2.Zero, 0);
+        AutoDockControlOverride.Set(controller, Vector3.Zero, Vector3D.Zero, 0);
+        AutoDockControlOverride.Set(null, Vector3.Zero, Vector3D.Zero, 0);
         Require(controller.DampenersOverride);
     }
 
@@ -142,5 +144,6 @@ namespace Sandbox.Game.Entities
         public long EntityId { get; set; }
         public bool MarkedForClose { get; set; }
         public bool DampenersOverride { get; set; }
+        public MyCubeGrid CubeGrid { get; set; }
     }
 }

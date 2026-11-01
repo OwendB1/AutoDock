@@ -14,7 +14,7 @@ internal sealed class AutoDockPilot
     private int autoDockLockReadyFrames;
     private bool autoDockFinalApproachStarted;
     private Vector3D autoDockPositionErrorIntegral;
-    private Vector3D autoDockOrientationErrorIntegral;
+    private AngularPidControl autoDockAngularControl;
 
     public AutoDockPilot(LockRotationService lockRotationService)
     {
@@ -33,7 +33,7 @@ internal sealed class AutoDockPilot
         autoDockLockReadyFrames = 0;
         autoDockFinalApproachStarted = false;
         autoDockPositionErrorIntegral = Vector3D.Zero;
-        autoDockOrientationErrorIntegral = Vector3D.Zero;
+        autoDockAngularControl = default;
     }
 
     public AutoDockPilotUpdateResult Cancel(string message, string font)
@@ -100,7 +100,7 @@ internal sealed class AutoDockPilot
 
         DockingMath.ApplyAutoDockControl(
             ref autoDockPositionErrorIntegral,
-            ref autoDockOrientationErrorIntegral,
+            ref autoDockAngularControl,
             pair,
             controller,
             target,
@@ -176,6 +176,6 @@ internal sealed class AutoDockPilot
         autoDockLockReadyFrames = 0;
         autoDockFinalApproachStarted = false;
         autoDockPositionErrorIntegral = Vector3D.Zero;
-        autoDockOrientationErrorIntegral = Vector3D.Zero;
+        autoDockAngularControl = default;
     }
 }

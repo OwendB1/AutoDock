@@ -8,8 +8,6 @@ internal static class AutoDockControlOverride
 {
     private static long controllerEntityId;
     private static Vector3 moveIndicator;
-    private static Vector2 rotationIndicator;
-    private static float rollIndicator;
     private static bool active;
     private static MyShipController dampenersController;
     private static bool savedDampenersEnabled;
@@ -22,10 +20,13 @@ internal static class AutoDockControlOverride
     public static void EndFrame()
     {
         if (!active)
+        {
             RestoreDampeners();
+            GyroVelocityControl.Clear();
+        }
     }
 
-    public static void Set(MyShipController controller, Vector3 move, Vector2 rotation, float roll, bool controlTranslation = true)
+    public static void Set(MyShipController controller, Vector3 move, Vector3D worldAngularVelocity, float gyroPowerLimit, bool controlTranslation = true)
     {
         if (controller == null)
         {
@@ -52,18 +53,16 @@ internal static class AutoDockControlOverride
 
         controllerEntityId = controller.EntityId;
         moveIndicator = move;
-        rotationIndicator = rotation;
-        rollIndicator = roll;
+        GyroVelocityControl.Set(controller.CubeGrid, worldAngularVelocity, gyroPowerLimit);
         active = true;
     }
 
     public static void Clear()
     {
         RestoreDampeners();
+        GyroVelocityControl.Clear();
         controllerEntityId = 0L;
         moveIndicator = Vector3.Zero;
-        rotationIndicator = Vector2.Zero;
-        rollIndicator = 0f;
         active = false;
     }
 
@@ -85,8 +84,8 @@ internal static class AutoDockControlOverride
             return false;
 
         move = moveIndicator;
-        rotation = rotationIndicator;
-        roll = rollIndicator;
+        rotation = Vector2.Zero;
+        roll = 0f;
         return true;
     }
 }

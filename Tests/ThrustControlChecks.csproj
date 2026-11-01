@@ -4,6 +4,8 @@
     <TargetFramework>net10.0</TargetFramework>
   </PropertyGroup>
   <ItemGroup>
+    <Compile Include="../ClientPlugin/AutoDock/AngularPidControl.cs" Link="AngularPidControl.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/GyroVelocityControl.cs" Link="GyroVelocityControl.cs" />
     <Compile Include="../ClientPlugin/AutoDock/LinearThrustControl.cs" Link="LinearThrustControl.cs" />
     <Compile Include="../ClientPlugin/AutoDock/AutoDockControlOverride.cs" Link="AutoDockControlOverride.cs" />
     <Reference Include="VRage.Math">

@@ -15,7 +15,7 @@ internal sealed class AutoLandingPilot
     private bool lockAttemptNotified;
     private bool waitingForContactNotified;
     private Vector3D positionErrorIntegral;
-    private Vector3D orientationErrorIntegral;
+    private AngularPidControl angularControl;
     private readonly Dictionary<long, MyLandingGear> suppressedAutoLockGears = new Dictionary<long, MyLandingGear>();
 
     public bool IsActive => landingGrid != null;
@@ -31,7 +31,7 @@ internal sealed class AutoLandingPilot
         lockAttemptNotified = false;
         waitingForContactNotified = false;
         positionErrorIntegral = Vector3D.Zero;
-        orientationErrorIntegral = Vector3D.Zero;
+        angularControl = default;
         EnsureLandingGearAutoLockDisabled(plan?.Gears);
     }
 
@@ -96,7 +96,7 @@ internal sealed class AutoLandingPilot
 
         DockingMath.ApplyGridAlignmentControl(
             ref positionErrorIntegral,
-            ref orientationErrorIntegral,
+            ref angularControl,
             landingGrid,
             controller,
             currentAnchorWorldPosition,
@@ -201,6 +201,6 @@ internal sealed class AutoLandingPilot
         lockAttemptNotified = false;
         waitingForContactNotified = false;
         positionErrorIntegral = Vector3D.Zero;
-        orientationErrorIntegral = Vector3D.Zero;
+        angularControl = default;
     }
 }
