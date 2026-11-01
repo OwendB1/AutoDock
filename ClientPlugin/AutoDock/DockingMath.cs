@@ -152,24 +152,13 @@ internal static class DockingMath
         if (!TryGetGridRotationTarget(pair, lockRotationService, out MatrixD targetOrientation))
             return false;
 
-        double orientationErrorMagnitude = GetOrientationErrorVector(currentGridMatrix, targetOrientation).Length();
-        Vector3D targetConstraintPosition = GetApproachConstraintPosition(
-            pair.Target,
-            AutoDockConstants.GetFinalApproachDistance(grid),
-            currentConstraintPosition,
-            finalConstraintPosition,
-            orientationErrorMagnitude,
-            finalApproachStarted,
-            out finalApproachActive);
-        if (!TryCreateDockingWorldMatrix(pair, targetOrientation, targetConstraintPosition, out MatrixD targetMatrix))
+        if (!TryGetDockingApproachAxis(pair.Target, out Vector3D approachAxis))
             return false;
 
-        bool positionReady = Vector3D.DistanceSquared(currentConstraintPosition, finalConstraintPosition)
-                             <= AutoDockConstants.AutoDockPositionTolerance * AutoDockConstants.AutoDockPositionTolerance;
-        bool angleReady = orientationErrorMagnitude * orientationErrorMagnitude
-                          <= AutoDockConstants.AutoDockOrientationTolerance * AutoDockConstants.AutoDockOrientationTolerance;
-        target = new DockingTarget(targetMatrix, targetConstraintPosition, positionReady && angleReady, finalApproachActive);
-        return true;
+        target = DockingTarget.Create(currentGridMatrix, targetOrientation, grid.PositionComp.LocalAABB,
+            currentConstraintPosition, finalConstraintPosition, approachAxis, finalApproachStarted);
+        finalApproachActive = target.FinalApproachActive;
+        return target.WorldMatrix.IsValid();
     }
 
     public static bool TryGetGravityTiltWarning(DockingPair pair, LockRotationService lockRotationService, out string warning)
@@ -233,6 +222,8 @@ internal static class DockingMath
         if (Vector3D.Dot(positionErrorIntegral, positionError) < 0.0)
             positionErrorIntegral = Vector3D.Zero;
 
+        if (target.HoldAxialPosition && TryGetDockingApproachAxis(pair.Target, out Vector3D holdAxis))
+            positionErrorIntegral -= holdAxis * Vector3D.Dot(positionErrorIntegral, holdAxis);
         positionErrorIntegral = ClampVectorMagnitude(positionErrorIntegral, AutoDockConstants.AutoDockLinearIntegralLimit);
 
         double maxLinearAcceleration = target.FinalApproachActive
@@ -253,8 +244,17 @@ internal static class DockingMath
             ? thrustControl.CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix)
             : Vector3.Zero;
 
-        ApplyRotationControl(ref angularControl, grid, controller, moveIndicator, orientationError,
-            AutoDockConstants.AutoDockMaxAngularVelocity, allowTranslation);
+        if (target.MaxAngularVelocity <= 0.0)
+        {
+            angularControl = default;
+            AutoDockControlOverride.Set(controller, moveIndicator, Vector3D.Zero,
+                AutoDockConstants.AutoDockAngularMaxTorque, allowTranslation);
+        }
+        else
+        {
+            ApplyRotationControl(ref angularControl, grid, controller, moveIndicator, orientationError,
+                target.MaxAngularVelocity, allowTranslation);
+        }
     }
 
     public static void ApplyGridAlignmentControl(
@@ -496,39 +496,6 @@ internal static class DockingMath
             out right);
     }
 
-    private static Vector3D GetApproachConstraintPosition(
-        MyShipConnector targetConnector,
-        double finalApproachDistance,
-        Vector3D currentConstraintPosition,
-        Vector3D finalConstraintPosition,
-        double orientationErrorMagnitude,
-        bool finalApproachStarted,
-        out bool finalApproachActive)
-    {
-        finalApproachActive = finalApproachStarted;
-        if (!TryGetDockingApproachAxis(targetConnector, out Vector3D approachAxis))
-            return finalConstraintPosition;
-
-        Vector3D finalPositionError = finalConstraintPosition - currentConstraintPosition;
-        double signedAxialOffset = Vector3D.Dot(currentConstraintPosition - finalConstraintPosition, approachAxis);
-        double approachSign = signedAxialOffset < 0.0 ? -1.0 : 1.0;
-        Vector3D axialPositionError = approachAxis * Vector3D.Dot(finalPositionError, approachAxis);
-        Vector3D planarPositionError = finalPositionError - axialPositionError;
-        double axialDistance = Math.Abs(signedAxialOffset);
-        bool finalApproachReady =
-            finalApproachStarted
-            || (axialDistance <= finalApproachDistance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance
-                && planarPositionError.LengthSquared()
-                <= AutoDockConstants.AutoDockFinalApproachPlanarTolerance * AutoDockConstants.AutoDockFinalApproachPlanarTolerance
-                && orientationErrorMagnitude <= AutoDockConstants.AutoDockFinalApproachOrientationThreshold);
-
-        finalApproachActive = finalApproachReady;
-        // Hold staging point on same side of connector as ship until lateral alignment is done.
-        return finalApproachReady
-            ? finalConstraintPosition
-            : finalConstraintPosition + approachAxis * (approachSign * finalApproachDistance);
-    }
-
     private static bool IsFacingTowards(MyShipConnector connector, Vector3D otherConnectorPosition)
     {
         if (connector == null || connector.MarkedForClose || connector.PositionComp == null)
@@ -539,24 +506,6 @@ internal static class DockingMath
         double dummyDistanceSquared = Vector3D.DistanceSquared(dummyCenter, otherConnectorPosition);
         double modelDistanceSquared = Vector3D.DistanceSquared(modelCenter, otherConnectorPosition);
         return dummyDistanceSquared + AutoDockConstants.MinConnectorDistanceSquared < modelDistanceSquared;
-    }
-
-    private static bool TryCreateDockingWorldMatrix(
-        DockingPair pair,
-        MatrixD targetOrientation,
-        Vector3D desiredConstraintPosition,
-        out MatrixD targetMatrix)
-    {
-        targetMatrix = MatrixD.Identity;
-        MyCubeGrid grid = pair.Local.CubeGrid;
-        MatrixD currentGridMatrix = grid.PositionComp.WorldMatrixRef;
-
-        Vector3D localConstraintPosition = Vector3D.Transform(pair.Local.ConstraintPositionWorld(), MatrixD.Invert(currentGridMatrix));
-        Vector3D transformedConstraintPosition = Vector3D.Transform(localConstraintPosition, targetOrientation);
-        targetMatrix = targetOrientation;
-        targetMatrix.Translation = desiredConstraintPosition - transformedConstraintPosition;
-
-        return targetMatrix.IsValid();
     }
 
     private static bool TryGetGridRotationTarget(DockingPair pair, LockRotationService lockRotationService, out MatrixD targetOrientation)
@@ -934,6 +883,7 @@ internal static class DockingMath
             AutoDockConstants.AutoDockAngularIntegralLimit,
             maxAngularVelocity,
             AutoDockConstants.AutoDockAngularVelocityGain);
+        angularVelocity = ClampVectorMagnitude(angularVelocity, maxAngularVelocity);
         float torqueLimit = MathHelper.Lerp(
             AutoDockConstants.AutoDockAngularMinTorque,
             AutoDockConstants.AutoDockAngularMaxTorque,

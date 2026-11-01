@@ -67,7 +67,8 @@ internal static partial class Program
         CheckDampenersLifecycle();
         CheckAngularControl();
         CheckGyroLifecycle();
-        Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, dampener lifecycle, angular PID, and gyro lifecycle passed.");
+        CheckDockingApproach();
+        Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, dampener lifecycle, angular PID, gyro lifecycle, and docking approach passed.");
     }
 
     private static void CheckDampenersLifecycle()

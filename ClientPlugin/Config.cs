@@ -202,7 +202,7 @@ public class Config : INotifyPropertyChanged
         set => SetField(ref autoDockFinalApproachMaxLinearAcceleration, value);
     }
 
-    [Slider(0.2f, 10f, 0.1f, label: "Minimum distance", description: "Minimum staging distance in meters before straight-in final approach. AutoDock increases this to the controlled grid's longest dimension for larger ships.")]
+    [Slider(0.2f, 10f, 0.1f, label: "Minimum distance", description: "Minimum staging distance in meters. Scales to 10% of ship length, up to 10 m. Aligned ships already closer can continue inward.")]
     public double AutoDockFinalApproachDistance
     {
         get => autoDockFinalApproachDistance;

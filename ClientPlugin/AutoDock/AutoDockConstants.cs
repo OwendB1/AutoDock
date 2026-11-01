@@ -76,11 +76,6 @@ internal static class AutoDockConstants
         return Math.Max(SoftSelectRadius, GetSearchRadius(grid));
     }
 
-    public static double GetFinalApproachDistance(MyCubeGrid grid)
-    {
-        return Math.Max(AutoDockFinalApproachDistance, GetGridLength(grid));
-    }
-
     private static float GetGridLength(MyCubeGrid grid)
     {
         Vector3 size = grid?.PositionComp?.LocalAABB.Size ?? Vector3.Zero;

@@ -8,6 +8,7 @@
     <Compile Include="../ClientPlugin/AutoDock/GyroVelocityControl.cs" Link="GyroVelocityControl.cs" />
     <Compile Include="../ClientPlugin/AutoDock/LinearThrustControl.cs" Link="LinearThrustControl.cs" />
     <Compile Include="../ClientPlugin/AutoDock/AutoDockControlOverride.cs" Link="AutoDockControlOverride.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/DockingTarget.cs" Link="DockingTarget.cs" />
     <Reference Include="VRage.Math">
       <HintPath>$(Bin64)/VRage.Math.dll</HintPath>
     </Reference>
