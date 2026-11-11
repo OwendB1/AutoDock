@@ -9,6 +9,14 @@
     <Compile Include="../ClientPlugin/AutoDock/LinearThrustControl.cs" Link="LinearThrustControl.cs" />
     <Compile Include="../ClientPlugin/AutoDock/AutoDockControlOverride.cs" Link="AutoDockControlOverride.cs" />
     <Compile Include="../ClientPlugin/AutoDock/DockingTarget.cs" Link="DockingTarget.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/DockingPair.cs" Link="DockingPair.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/LockRotationService.cs" Link="LockRotationService.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/DockingRotationPreference.cs" Link="DockingRotationPreference.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/AutoDockPilot.cs" Link="AutoDockPilot.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/AutoDockPilotUpdateResult.cs" Link="AutoDockPilotUpdateResult.cs" />
+    <Compile Include="../ClientPlugin/Settings/ConfigStorage.cs" Link="ConfigStorage.cs" />
+    <Compile Include="../ClientPlugin/AutoDock/AutoDockHudHints.cs" Link="AutoDockHudHints.cs" />
+    <Compile Include="../ClientPlugin/Settings/Tools/Binding.cs" Link="Binding.cs" />
     <Reference Include="VRage.Math">
       <HintPath>$(Bin64)/VRage.Math.dll</HintPath>
     </Reference>

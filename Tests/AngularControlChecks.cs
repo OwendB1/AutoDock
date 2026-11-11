@@ -130,12 +130,20 @@ namespace Sandbox.Game.Entities
 {
     internal sealed class MyCubeGrid
     {
+        public long EntityId { get; set; }
+        public bool MarkedForClose { get; set; }
+        public bool IsStatic { get; set; }
+        public object Physics { get; set; } = new object();
         public readonly List<MyGyro> Gyros = new List<MyGyro>();
+        public readonly List<Sandbox.Game.Entities.Cube.MyShipConnector> Connectors = new List<Sandbox.Game.Entities.Cube.MyShipConnector>();
 
         public IEnumerable<T> GetFatBlocks<T>()
         {
             foreach (MyGyro gyro in Gyros)
                 if (gyro is T block)
+                    yield return block;
+            foreach (var connector in Connectors)
+                if (connector is T block)
                     yield return block;
         }
     }

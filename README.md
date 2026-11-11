@@ -1,4 +1,14 @@
-# Space Engineers Client Plugin Template
+# AutoDock
+
+Automatic connector docking and terrain landing for Space Engineers 1. Press **Ctrl+P** once to preview connector pairs, then again to start docking. Use **Ctrl+Up/Down** to select a pair, **Alt+Up/Down** to select a ship connector, and **Ctrl+R** to cycle the lock rotation in 45-degree steps. **Alt+P** previews and starts automatic landing. All bindings can be changed in plugin settings.
+
+The preview orientation stays fixed relative to the target connector as your ship moves. Starting docking saves the selected lock rotation for that world, controlled grid, and local/target connector combination, including across restarts and cancelled attempts. Preview changes only replace the saved choice when you start another docking procedure. The displayed lock rotation is the connector roll step, from 0 to 315 degrees.
+
+While controlling a cockpit or ship controller, a subtle HUD hint appears when a compatible connector pair is within docking range. It shows your configured keybind, then changes to start/rotate or cancel hints during preview and flight. Hints respect the game's control-hints setting and hide in menus and with the HUD.
+
+Report bugs through [GitHub issues](https://github.com/OwendB1/AutoDock/issues), including the plugin log and reproduction steps.
+
+The development setup below comes from the Space Engineers client plugin template.
 
 [Server/Client version of the template](https://github.com/viktor-ferenczi/se-server-plugin-template)
 

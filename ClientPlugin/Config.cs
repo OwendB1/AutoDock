@@ -48,6 +48,8 @@ public class Config : INotifyPropertyChanged
 
     #endregion
 
+    public List<DockingRotationPreference> DockingRotations { get; set; } = new List<DockingRotationPreference>();
+
     #region User interface
 
     public readonly string Title = "AutoDock";
@@ -105,7 +107,7 @@ public class Config : INotifyPropertyChanged
         set => SetField(ref nextConnectorKeybind, value);
     }
 
-    [Keybind(label: "Cycle lock rotation", description: "Cycle through 8 connector lock rotation steps for selected connector pair while AutoDock preview is active.")]
+    [Keybind(label: "Cycle lock rotation", description: "Cycle through 8 fixed connector lock rotations in preview. Starting docking saves this choice for this grid and connector pair.")]
     public Binding RotateAlignmentKeybind
     {
         get => rotateAlignmentKeybind;

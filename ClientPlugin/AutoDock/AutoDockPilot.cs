@@ -26,6 +26,7 @@ internal sealed class AutoDockPilot
 
     public void Start(DockingPair pair)
     {
+        lockRotationService.RememberSelectedRotation(pair);
         autoDockingPair = pair;
         autoDockFrames = 0;
         autoDockConnectRequested = false;

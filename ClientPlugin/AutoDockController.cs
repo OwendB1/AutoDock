@@ -13,6 +13,7 @@ internal sealed class AutoDockController
     private readonly AutoDockPilot autoDockPilot;
     private readonly AutoLandingPilot autoLandingPilot;
     private readonly AutoDockInput autoDockInput;
+    private readonly AutoDockHudHints hudHints;
 
     private bool dockingPreviewActive;
     private bool landingPreviewActive;
@@ -26,6 +27,7 @@ internal sealed class AutoDockController
         autoDockPilot = new AutoDockPilot(lockRotationService);
         autoLandingPilot = new AutoLandingPilot();
         autoDockInput = new AutoDockInput();
+        hudHints = new AutoDockHudHints(pairCatalog);
     }
 
     public void Update()
@@ -34,6 +36,7 @@ internal sealed class AutoDockController
         try
         {
             UpdateCore();
+            hudHints.Update(dockingPreviewActive, autoDockPilot.IsActive, landingPreviewActive, autoLandingPilot.IsActive);
         }
         finally
         {
@@ -94,7 +97,7 @@ internal sealed class AutoDockController
         {
             if (autoLandingPilot.IsActive)
             {
-                Notify("AutoDock: auto-landing active. Alt+P cancels landing.", "Red");
+                Notify("AutoDock: auto-landing active. Cancel it before connector docking.", "Red");
             }
             else if (autoDockPilot.IsActive)
             {
@@ -177,8 +180,8 @@ internal sealed class AutoDockController
 
     public void Dispose()
     {
+        hudHints.Clear();
         ClearSelection();
-        lockRotationService.ClearRememberedRotations();
         pairCatalog.ClearRememberedConnectorSelection();
         autoDockInput.Unregister();
     }
@@ -402,13 +405,11 @@ internal sealed class AutoDockController
                 ? "in range"
                 : $"outside {AutoDockConstants.GetSearchRadius(pair.Local.CubeGrid):0.#} m range";
         lockRotationService.TryGetRotationStep(pair, out int rotationStep);
-        int angleDegrees = DockingMath.TryGetOrientationAngleDegrees(pair, rotationStep, out int projectedAngleDegrees)
-            ? projectedAngleDegrees
-            : DockingMath.GetRotationAngleDegrees(rotationStep);
+        int angleDegrees = DockingMath.GetRotationAngleDegrees(rotationStep);
         int connectorNumber = pairCatalog.SelectedConnectorIndex >= 0 ? pairCatalog.SelectedConnectorIndex + 1 : 1;
         int pairNumber = pairCatalog.SelectedIndex >= 0 ? pairCatalog.SelectedIndex + 1 : 1;
         Notify(
-            $"AutoDock: connector {connectorNumber}/{Math.Max(1, pairCatalog.ConnectorCount)}, pair {pairNumber}/{Math.Max(1, pairCatalog.PairCount)}, {pair.Distance:0.0} m, {state}, angle {angleDegrees} deg.",
+            $"AutoDock: connector {connectorNumber}/{Math.Max(1, pairCatalog.ConnectorCount)}, pair {pairNumber}/{Math.Max(1, pairCatalog.PairCount)}, {pair.Distance:0.0} m, {state}, lock rotation {angleDegrees} deg.",
             pair.InRange ? "White" : "Red");
     }
 
@@ -447,7 +448,6 @@ internal sealed class AutoDockController
     private void ResetSessionState()
     {
         ClearSelection();
-        lockRotationService.ClearRememberedRotations();
         pairCatalog.ClearRememberedConnectorSelection();
     }
 

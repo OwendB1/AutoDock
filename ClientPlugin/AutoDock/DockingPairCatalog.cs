@@ -29,6 +29,25 @@ internal sealed class DockingPairCatalog
     public int ConnectorCount => localConnectors.Count;
     public int PairCount => pairs.Count;
 
+    public bool HasPairInRange(MyCubeGrid grid)
+    {
+        if (grid == null || grid.MarkedForClose)
+            return false;
+
+        // Use the same compatibility checks without changing the player's connector selection.
+        var nearbyPairs = new List<DockingPair>();
+        float radius = AutoDockConstants.GetSearchRadius(grid);
+        foreach (MyShipConnector connector in grid.GetFatBlocks<MyShipConnector>())
+        {
+            if (!DockingMath.IsConnectorAvailable(connector, localSide: true))
+                continue;
+            AddPairsNear(connector, radius, nearbyPairs);
+            if (nearbyPairs.Count > 0)
+                return true;
+        }
+        return false;
+    }
+
     public void RememberPreferredConnector(MyShipConnector localConnector)
     {
         MyCubeGrid grid = localConnector?.CubeGrid;
@@ -177,6 +196,7 @@ internal sealed class DockingPairCatalog
 
     private void AddPairsNear(MyShipConnector localConnector, float radius, List<DockingPair> connectorPairs)
     {
+        pairKeys.Clear(); // Deduplication belongs to this spatial query, not the visible selection.
         Vector3D position = DockingMath.GetConnectorReferencePosition(localConnector);
         BoundingSphereD sphere = new BoundingSphereD(position, radius);
         List<MyEntity> entities = MyEntities.GetEntitiesInSphere(ref sphere);
@@ -237,7 +257,7 @@ internal sealed class DockingPairCatalog
             targetConnector,
             distance,
             lockReady,
-            lockRotationService.HasRememberedRotation(localConnector.EntityId, targetConnector.EntityId)));
+            lockRotationService.HasRememberedRotation(localConnector, targetConnector)));
     }
 
     private void SelectConnectorByIndex(int connectorIndex, int fallbackPairIndex, long preferredTargetId = 0)

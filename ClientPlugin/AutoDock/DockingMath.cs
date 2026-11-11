@@ -381,32 +381,6 @@ internal static class DockingMath
         return NormalizeRotationStep(rotationStep) * 360 / AutoDockConstants.LockRotationStepCount;
     }
 
-    public static bool TryGetOrientationAngleDegrees(DockingPair pair, int rotationStep, out int angleDegrees)
-    {
-        angleDegrees = 0;
-        if (!TryGetDesiredOrientationIndicator(pair, rotationStep, out Vector3D faceNormal, out Vector3D direction, out _))
-            return false;
-
-        if (!TryGetConnectorFaceWorldMatrix(pair.Target, out MatrixD targetFaceWorldMatrix))
-            return false;
-
-        Vector3D baseDirection = RejectFromAxis(targetFaceWorldMatrix.Up, faceNormal);
-        if (baseDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            baseDirection = RejectFromAxis(targetFaceWorldMatrix.Right, faceNormal);
-        if (baseDirection.LengthSquared() < AutoDockConstants.MinConnectorDistanceSquared)
-            return false;
-
-        baseDirection.Normalize();
-        double angleRadians = SignedAngleAroundAxis(baseDirection, direction, faceNormal);
-        if (angleRadians < 0.0)
-            angleRadians += Math.PI * 2.0;
-
-        angleDegrees = (int)Math.Round(MathHelper.ToDegrees((float)angleRadians));
-        if (angleDegrees >= 360)
-            angleDegrees -= 360;
-        return true;
-    }
-
     public static int GetDefaultRotationStep(DockingPair pair)
     {
         if (!TryGetCurrentOrientationIndicator(pair, out Vector3D currentDirection))

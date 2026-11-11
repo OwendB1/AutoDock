@@ -15,8 +15,13 @@ public static class ConfigStorage
     {
         var path = ConfigFilePath;
         Directory.CreateDirectory(Path.GetDirectoryName(path));
-        using (var text = File.CreateText(path))
+        var temporaryPath = path + ".tmp";
+        using (var text = File.CreateText(temporaryPath))
             new XmlSerializer(typeof(Config)).Serialize(text, config);
+        if (File.Exists(path))
+            File.Replace(temporaryPath, path, null);
+        else
+            File.Move(temporaryPath, path);
     }
 
     public static Config Load()

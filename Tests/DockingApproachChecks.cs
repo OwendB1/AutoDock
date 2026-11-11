@@ -98,6 +98,8 @@ namespace ClientPlugin
 {
     internal static class AutoDockConstants
     {
+        public const int AutoDockTimeoutFrames = 900;
+        public const int AutoDockLockDelayFrames = 80;
         public static double AutoDockFinalApproachDistance = 2.0;
         public const double AutoDockFinalApproachEntryDistanceTolerance = 0.35;
         public const double AutoDockFinalApproachPlanarTolerance = 0.25;

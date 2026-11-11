@@ -68,7 +68,9 @@ internal static partial class Program
         CheckAngularControl();
         CheckGyroLifecycle();
         CheckDockingApproach();
-        Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, dampener lifecycle, angular PID, gyro lifecycle, and docking approach passed.");
+        CheckDockingOrientation();
+        CheckHudHints();
+        Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, dampener lifecycle, angular PID, gyro lifecycle, docking approach, and docking orientation passed.");
     }
 
     private static void CheckDampenersLifecycle()
@@ -144,6 +146,8 @@ namespace Sandbox.Game.Entities
     {
         public long EntityId { get; set; }
         public bool MarkedForClose { get; set; }
+        public bool IsWorking { get; set; } = true;
+        public bool EnableShipControl { get; set; } = true;
         public bool DampenersOverride { get; set; }
         public MyCubeGrid CubeGrid { get; set; }
     }
