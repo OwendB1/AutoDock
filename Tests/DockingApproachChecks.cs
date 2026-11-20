@@ -20,7 +20,7 @@ internal static partial class Program
             DockingTarget target = Approach(length, gap);
             CheckVector(target.ConstraintPosition, Vector3D.Zero);
             AssertApproach(target.FinalApproachActive, "Aligned close ship did not enter final approach");
-            AssertApproach(target.MaxAngularVelocity <= 0.5 / length, "Close hull rotation is too fast");
+            AssertApproach(target.MaxAngularVelocity <= AutoDockConstants.RotationHullSpeed / length + 1e-9, "Close hull rotation is too fast");
         }
 
         DockingTarget lateral = Approach(50, 1, lateral: 0.3);
@@ -46,10 +46,29 @@ internal static partial class Program
             CheckVector(retreat.WorldMatrix.Forward, MatrixD.Identity.Forward);
             DockingTarget cleared = Approach(50, retreat.ConstraintPosition.Z, angle: 0.1);
             AssertApproach(cleared.MaxAngularVelocity > 0, "Rotation never resumed after gaining clearance");
-            AssertApproach(cleared.MaxAngularVelocity <= 0.01, "Rotation resumed too quickly beside the target");
+            AssertApproach(cleared.MaxAngularVelocity <= AutoDockConstants.RotationHullSpeed / 50 + 1e-9, "Rotation resumed too quickly beside the target");
             AssertApproach(Math.Abs(cleared.ConstraintPosition.Z) >= 5.1,
                 "Staging target would close the rotation clearance again");
         }
+
+        // With the center of mass in the middle, the hull sweeps half of the worst-case diagonal radius.
+        DockingTarget centeredRetreat = Approach(50, 1, angle: 0.1, centerOfMass: new Vector3D(25, 0, 0));
+        AssertApproach(centeredRetreat.Retreating && centeredRetreat.ConstraintPosition.Z > 2.5 && centeredRetreat.ConstraintPosition.Z < 3.5,
+            "Retreat should use the farthest hull point from the center of mass");
+        DockingTarget offsetRetreat = Approach(50, 1, angle: 0.1, centerOfMass: Vector3D.Zero);
+        AssertApproach(offsetRetreat.ConstraintPosition.Z > 5 && offsetRetreat.ConstraintPosition.Z < 6,
+            "Center of mass at one end must keep the full-length turning radius");
+
+        // An obstacle behind the ship caps the retreat; the turn then happens slowly at the reachable distance.
+        DockingTarget blocked = Approach(50, 1, angle: 0.1, maxAxialReach: 2.0);
+        AssertApproach(blocked.ClearanceLimited && blocked.Retreating && Math.Abs(blocked.ConstraintPosition.Z - 2.0) < 1e-6,
+            "Blocked retreat must stop at the reachable distance");
+        DockingTarget blockedTurn = Approach(50, 2.0, angle: 0.1, maxAxialReach: 2.0);
+        AssertApproach(blockedTurn.ClearanceLimited && !blockedTurn.Retreating && blockedTurn.MaxAngularVelocity > 0
+                       && blockedTurn.MaxAngularVelocity <= AutoDockConstants.RotationHullSpeed / 50 * 0.5 + 1e-9,
+            "Blocked retreat must turn slowly in place once the reachable distance is reached");
+        AssertApproach(Vector3D.Dot(blocked.RetreatDirection, Vector3D.Backward) > 0.999,
+            "Retreat direction must point away from the target connector");
 
         DockingTarget halfTurn = Approach(50, 1, angle: Math.PI);
         AssertApproach(!halfTurn.FinalApproachActive && !halfTurn.DockingReady && halfTurn.MaxAngularVelocity == 0,
@@ -75,10 +94,11 @@ internal static partial class Program
     }
 
     private static DockingTarget Approach(double length, double gap, double angle = 0, double lateral = 0,
-        bool finalApproachStarted = false)
+        bool finalApproachStarted = false, Vector3D? centerOfMass = null, double maxAxialReach = double.PositiveInfinity)
     {
         return DockingTarget.Create(MatrixD.Identity, MatrixD.CreateRotationY(angle), Bounds(length),
-            new Vector3D(lateral, 0, gap), Vector3D.Zero, Vector3D.Backward, finalApproachStarted);
+            new Vector3D(lateral, 0, gap), Vector3D.Zero, Vector3D.Backward, finalApproachStarted,
+            centerOfMass, maxAxialReach);
     }
 
     private static BoundingBox Bounds(double length)
@@ -108,5 +128,11 @@ namespace ClientPlugin
         public const double AutoDockOrientationTolerance = 0.01;
         public const double AutoDockLinearBrakePadding = 0.05;
         public const double AutoDockMaxAngularVelocity = 0.65;
+        public const double RotationHullSpeed = 2.0;
+        public const int AutoDockHardTimeoutFrames = 300 * 60;
+        public const int AutoDockConnectRetryFrames = 120;
+        public const int AutoDockMaxConnectAttempts = 5;
+        public const bool RetreatObstacleCheck = true;
+        public const double RetreatObstacleMargin = 2.0;
     }
 }

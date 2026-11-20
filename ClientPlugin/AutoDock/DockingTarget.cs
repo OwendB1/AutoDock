@@ -11,9 +11,18 @@ internal sealed class DockingTarget
     public readonly bool FinalApproachActive;
     public readonly bool HoldAxialPosition;
     public readonly double MaxAngularVelocity;
+    /// <summary>The ship is backing away along the approach axis to gain room for a turn.</summary>
+    public readonly bool Retreating;
+    /// <summary>An obstacle limits the retreat, so the remaining turn happens slowly at the reachable distance.</summary>
+    public readonly bool ClearanceLimited;
+    /// <summary>World direction of the retreat (away from the target connector along its approach axis).</summary>
+    public readonly Vector3D RetreatDirection;
+    /// <summary>Current distance between the connectors along the approach axis.</summary>
+    public readonly double AxialDistance;
 
     private DockingTarget(MatrixD worldMatrix, Vector3D constraintPosition, bool dockingReady,
-        bool finalApproachActive, bool holdAxialPosition, double maxAngularVelocity)
+        bool finalApproachActive, bool holdAxialPosition, double maxAngularVelocity,
+        bool retreating, bool clearanceLimited, Vector3D retreatDirection, double axialDistance)
     {
         WorldMatrix = worldMatrix;
         ConstraintPosition = constraintPosition;
@@ -21,8 +30,19 @@ internal sealed class DockingTarget
         FinalApproachActive = finalApproachActive;
         HoldAxialPosition = holdAxialPosition;
         MaxAngularVelocity = maxAngularVelocity;
+        Retreating = retreating;
+        ClearanceLimited = clearanceLimited;
+        RetreatDirection = retreatDirection;
+        AxialDistance = axialDistance;
     }
 
+    /// <param name="centerOfMassLocal">
+    /// Grid-local center of mass. When known, the turning radius is the distance from it to the farthest
+    /// bounds corner; otherwise the full bounds diagonal is used as a worst-case radius.
+    /// </param>
+    /// <param name="maxAxialReach">
+    /// Largest distance from the target along the approach axis that is free of obstacles.
+    /// </param>
     public static DockingTarget Create(
         MatrixD currentGridMatrix,
         MatrixD targetOrientation,
@@ -30,7 +50,9 @@ internal sealed class DockingTarget
         Vector3D currentConstraintPosition,
         Vector3D finalConstraintPosition,
         Vector3D approachAxis,
-        bool finalApproachStarted)
+        bool finalApproachStarted,
+        Vector3D? centerOfMassLocal = null,
+        double maxAxialReach = double.PositiveInfinity)
     {
         Vector3 size = gridBounds.Size;
         double gridLength = Math.Max(size.X, Math.Max(size.Y, size.Z));
@@ -45,12 +67,23 @@ internal sealed class DockingTarget
             (currentGridMatrix.Right - targetOrientation.Right).LengthSquared()
             + (currentGridMatrix.Up - targetOrientation.Up).LengthSquared()
             + (currentGridMatrix.Forward - targetOrientation.Forward).LengthSquared()));
-        // The bounds diagonal covers hull points relative to either the connector or center of mass.
-        double rotationRadius = size.Length();
+        // orientationError is 4·sin(angle/2), so a hull point at distance r from the rotation center moves by the
+        // chord r·orientationError/2. The ship turns around its center of mass, so r is the farthest bounds corner.
+        double rotationRadius = Math.Max(1.0, GetRotationRadius(gridBounds, centerOfMassLocal));
         double rotationSweep = rotationRadius * orientationError * 0.5;
         double clearancePadding = AutoDockConstants.AutoDockPositionTolerance + AutoDockConstants.AutoDockLinearBrakePadding;
         double rotationClearance = rotationSweep + Math.Min(clearancePadding, rotationSweep);
-        bool canRotate = rotationClearance <= axialDistance;
+
+        // Rock or another grid behind the ship: back off only as far as it is free, then turn slowly there.
+        bool clearanceLimited = false;
+        if (rotationClearance > maxAxialReach)
+        {
+            rotationClearance = Math.Max(0.0, maxAxialReach);
+            clearanceLimited = true;
+        }
+
+        double reachTolerance = clearanceLimited ? AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance : 0.0;
+        bool canRotate = rotationClearance <= axialDistance + reachTolerance;
         bool aligned = planarError.LengthSquared()
                        <= AutoDockConstants.AutoDockFinalApproachPlanarTolerance * AutoDockConstants.AutoDockFinalApproachPlanarTolerance
                        && orientationError <= AutoDockConstants.AutoDockFinalApproachOrientationThreshold;
@@ -62,16 +95,23 @@ internal sealed class DockingTarget
         if (!canRotate)
         {
             // Gain clearance before turning; do not rotate while retreating beside the target.
-            targetDistance = rotationClearance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance;
+            targetDistance = clearanceLimited
+                ? rotationClearance
+                : rotationClearance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance;
             targetOrientation = currentGridMatrix;
         }
         Vector3D targetConstraintPosition = finalApproachActive
             ? finalConstraintPosition
             : finalConstraintPosition + approachAxis * (approachSign * targetDistance);
 
+        // Close to the target the outermost hull point turns at no more than RotationHullSpeed (m/s).
+        double hullSpeedLimit = AutoDockConstants.RotationHullSpeed / rotationRadius;
         double maxAngularVelocity = AutoDockConstants.AutoDockMaxAngularVelocity;
-        if (finalApproachActive || axialDistance <= alignmentDistance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance)
-            maxAngularVelocity = Math.Min(maxAngularVelocity, 0.5 / Math.Max(1.0, rotationRadius));
+        if (finalApproachActive || clearanceLimited
+            || axialDistance <= alignmentDistance + AutoDockConstants.AutoDockFinalApproachEntryDistanceTolerance)
+            maxAngularVelocity = Math.Min(maxAngularVelocity, hullSpeedLimit);
+        if (clearanceLimited)
+            maxAngularVelocity = Math.Min(maxAngularVelocity, hullSpeedLimit * 0.5);
         if (!canRotate)
             maxAngularVelocity = 0.0;
 
@@ -82,6 +122,19 @@ internal sealed class DockingTarget
                             <= AutoDockConstants.AutoDockPositionTolerance * AutoDockConstants.AutoDockPositionTolerance
                             && orientationError <= AutoDockConstants.AutoDockOrientationTolerance;
         return new DockingTarget(targetMatrix, targetConstraintPosition, dockingReady, finalApproachActive,
-            !finalApproachActive && canRotate && targetDistance == axialDistance, maxAngularVelocity);
+            !finalApproachActive && canRotate && targetDistance == axialDistance, maxAngularVelocity,
+            !canRotate, clearanceLimited, approachAxis * approachSign, axialDistance);
+    }
+
+    private static double GetRotationRadius(BoundingBox bounds, Vector3D? centerOfMassLocal)
+    {
+        if (!centerOfMassLocal.HasValue || !centerOfMassLocal.Value.IsValid())
+            return bounds.Size.Length();
+
+        Vector3D center = centerOfMassLocal.Value;
+        double radiusSquared = 0.0;
+        foreach (Vector3 corner in bounds.GetCorners())
+            radiusSquared = Math.Max(radiusSquared, Vector3D.DistanceSquared(corner, center));
+        return Math.Sqrt(radiusSquared);
     }
 }

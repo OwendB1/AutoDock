@@ -68,6 +68,7 @@ internal static partial class Program
         CheckAngularControl();
         CheckGyroLifecycle();
         CheckDockingApproach();
+        CheckOrientationError();
         CheckDockingOrientation();
         CheckHudHints();
         Console.WriteLine("Thrust scaling, six directions, braking, gravity, rotation, invalid inputs, dampener lifecycle, angular PID, gyro lifecycle, docking approach, and docking orientation passed.");

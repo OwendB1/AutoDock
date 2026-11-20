@@ -165,7 +165,13 @@ namespace ClientPlugin
 
         // Orientation checks stop before flight simulation; unexpected entry must fail loudly.
         public static bool TryCreateDockingTarget(DockingPair pair, LockRotationService rotations, bool final,
-            out DockingTarget target, out bool finalActive) => throw new NotSupportedException();
+            out DockingTarget target, out bool finalActive, double maxAxialReach = double.PositiveInfinity)
+            => throw new NotSupportedException();
+        public static double MeasureFreeDistance(MyCubeGrid grid, Vector3D direction, double maxDistance)
+            => throw new NotSupportedException();
+        public static void GetProgressSample(DockingPair pair, DockingTarget target, out double connectorDistance,
+            out double orientationMismatch, out double relativeSpeed, out double angularSpeed)
+            => throw new NotSupportedException();
         public static bool TryGetControlledShipController(MyCubeGrid grid, out MyShipController controller)
         {
             controller = MySession.Static?.Controller;
