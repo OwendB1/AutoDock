@@ -45,6 +45,12 @@ public class Config : INotifyPropertyChanged
     private double autoDockAngularSofteningThreshold = 0.35;
     private float autoDockAngularMinTorque = 0.35f;
     private float autoDockAngularMaxTorque = 0.8f;
+    private double rotationHullSpeed = 2.0;
+    private double maxApproachSpeed = 12.0;
+    private double retreatMaxSpeed = 3.0;
+    private bool retreatObstacleCheck = true;
+    private double retreatObstacleMargin = 2.0;
+    private int autoDockHardTimeoutSeconds = 300;
 
     #endregion
 
@@ -114,13 +120,57 @@ public class Config : INotifyPropertyChanged
         set => SetField(ref rotateAlignmentKeybind, value);
     }
 
+    [Separator("Speed and Safety")]
+
+    [Slider(0.5f, 6f, 0.1f, label: "Turn speed near target (m/s)", description: "Fastest speed of the outermost hull point while the ship turns close to the target connector.")]
+    public double RotationHullSpeed
+    {
+        get => rotationHullSpeed;
+        set => SetField(ref rotationHullSpeed, value);
+    }
+
+    [Slider(2f, 40f, 0.5f, label: "Max approach speed (m/s)", description: "AutoDock never flies faster than this relative to the target.")]
+    public double MaxApproachSpeed
+    {
+        get => maxApproachSpeed;
+        set => SetField(ref maxApproachSpeed, value);
+    }
+
+    [Slider(0.5f, 10f, 0.5f, label: "Max back-off speed (m/s)", description: "Speed limit while backing away from the target to make room for a turn.")]
+    public double RetreatMaxSpeed
+    {
+        get => retreatMaxSpeed;
+        set => SetField(ref retreatMaxSpeed, value);
+    }
+
+    [Checkbox(label: "Check back-off path for obstacles", description: "Before backing away to turn, cast rays along the path. In caves or tight hangars the ship backs off only as far as it is free, then turns slowly in place.")]
+    public bool RetreatObstacleCheck
+    {
+        get => retreatObstacleCheck;
+        set => SetField(ref retreatObstacleCheck, value);
+    }
+
+    [Slider(0.5f, 10f, 0.5f, label: "Obstacle margin (m)", description: "Space kept between the hull and rock or grids when backing off.")]
+    public double RetreatObstacleMargin
+    {
+        get => retreatObstacleMargin;
+        set => SetField(ref retreatObstacleMargin, value);
+    }
+
     [Separator("Advanced")]
 
-    [Slider(60f, 3600f, 30f, SliderAttribute.SliderType.Integer, label: "Auto-dock timeout (frames)", description: "How long AutoDock keeps trying before it gives up. 60 frames is about 1 second.")]
+    [Slider(60f, 3600f, 30f, SliderAttribute.SliderType.Integer, label: "No-progress timeout (frames)", description: "AutoDock gives up when the ship makes no progress for this long. 60 frames is about 1 second.")]
     public int AutoDockTimeoutFrames
     {
         get => autoDockTimeoutFrames;
         set => SetField(ref autoDockTimeoutFrames, value);
+    }
+
+    [Slider(30f, 900f, 10f, SliderAttribute.SliderType.Integer, label: "Total time limit (s)", description: "Absolute limit for a single docking attempt, even while it is still making progress.")]
+    public int AutoDockHardTimeoutSeconds
+    {
+        get => autoDockHardTimeoutSeconds;
+        set => SetField(ref autoDockHardTimeoutSeconds, value);
     }
 
     [Slider(0.01f, 1f, 0.01f, label: "Position tolerance", description: "How close the two connectors must be before AutoDock treats their position as lined up. Lower is stricter.")]

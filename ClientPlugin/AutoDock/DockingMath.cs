@@ -141,7 +141,8 @@ internal static class DockingMath
         LockRotationService lockRotationService,
         bool finalApproachStarted,
         out DockingTarget target,
-        out bool finalApproachActive)
+        out bool finalApproachActive,
+        double maxAxialReach = double.PositiveInfinity)
     {
         target = null;
         finalApproachActive = finalApproachStarted;
@@ -155,8 +156,10 @@ internal static class DockingMath
         if (!TryGetDockingApproachAxis(pair.Target, out Vector3D approachAxis))
             return false;
 
+        Vector3D? centerOfMassLocal = grid.Physics != null ? grid.Physics.CenterOfMassLocal : (Vector3D?)null;
         target = DockingTarget.Create(currentGridMatrix, targetOrientation, grid.PositionComp.LocalAABB,
-            currentConstraintPosition, finalConstraintPosition, approachAxis, finalApproachStarted);
+            currentConstraintPosition, finalConstraintPosition, approachAxis, finalApproachStarted,
+            centerOfMassLocal, maxAxialReach);
         finalApproachActive = target.FinalApproachActive;
         return target.WorldMatrix.IsValid();
     }
@@ -239,6 +242,11 @@ internal static class DockingMath
             thrustControl,
             maxLinearAcceleration,
             target.FinalApproachActive);
+        // Backing off to make room for a turn is limited much harder than the normal approach.
+        double maxSpeed = target.Retreating
+            ? Math.Min(AutoDockConstants.RetreatMaxSpeed, AutoDockConstants.MaxApproachSpeed)
+            : AutoDockConstants.MaxApproachSpeed;
+        desiredWorldAcceleration = LimitSpeed(desiredWorldAcceleration, errorVelocity, thrustControl, maxSpeed, maxLinearAcceleration);
         desiredWorldAcceleration = ClampVectorMagnitude(desiredWorldAcceleration, maxLinearAcceleration);
         Vector3 moveIndicator = allowTranslation
             ? thrustControl.CreateMoveIndicator(desiredWorldAcceleration, inverseControllerMatrix)
@@ -867,9 +875,96 @@ internal static class DockingMath
 
     private static Vector3D GetOrientationErrorVector(MatrixD currentMatrix, MatrixD targetMatrix)
     {
-        return Vector3D.Cross(currentMatrix.Forward, targetMatrix.Forward)
-               + Vector3D.Cross(currentMatrix.Up, targetMatrix.Up)
-               + Vector3D.Cross(currentMatrix.Right, targetMatrix.Right);
+        return OrientationError.Compute(currentMatrix, targetMatrix);
+    }
+
+    /// <summary>Keeps the speed relative to the target below <paramref name="maxSpeed"/>, braking when it is exceeded.</summary>
+    private static Vector3D LimitSpeed(Vector3D desiredAcceleration, Vector3D errorVelocity, LinearThrustControl thrustControl,
+        double maxSpeed, double maxLinearAcceleration)
+    {
+        Vector3D relativeVelocity = -errorVelocity;
+        double speed = relativeVelocity.Length();
+        if (speed < 1e-3 || maxSpeed <= 0.0)
+            return desiredAcceleration;
+
+        Vector3D direction = relativeVelocity / speed;
+        double along = Vector3D.Dot(desiredAcceleration, direction);
+        if (speed >= maxSpeed)
+        {
+            // Too fast: no acceleration along the motion, brake in proportion to the excess.
+            double braking = Math.Min(thrustControl.GetAvailableAcceleration(-direction, maxLinearAcceleration),
+                (speed - maxSpeed) * 2.0 + 0.2);
+            return desiredAcceleration - direction * along - direction * Math.Max(0.0, braking);
+        }
+
+        if (along > 0.0 && speed > maxSpeed * 0.8)
+        {
+            // Fade out further acceleration over the last 20% below the limit.
+            double scale = (maxSpeed - speed) / (maxSpeed * 0.2);
+            return desiredAcceleration - direction * along * (1.0 - MathHelper.Clamp(scale, 0.0, 1.0));
+        }
+
+        return desiredAcceleration;
+    }
+
+    /// <summary>
+    /// Free distance behind the ship in <paramref name="direction"/>: rays from the bounds corners and center,
+    /// ignoring the ship's own physical grid group. Returns <paramref name="maxDistance"/> when nothing is hit.
+    /// </summary>
+    public static double MeasureFreeDistance(MyCubeGrid grid, Vector3D direction, double maxDistance)
+    {
+        if (grid == null || grid.MarkedForClose || direction.LengthSquared() < 1e-6 || maxDistance <= 0.0)
+            return maxDistance;
+
+        direction.Normalize();
+        var ownGrids = new System.Collections.Generic.HashSet<long> { grid.EntityId };
+        try
+        {
+            foreach (var groupGrid in Sandbox.ModAPI.MyAPIGateway.GridGroups.GetGroup(grid, VRage.Game.ModAPI.GridLinkTypeEnum.Physical))
+                ownGrids.Add(groupGrid.EntityId);
+        }
+        catch (Exception)
+        {
+            // Group lookup is best effort; the grid itself is always excluded.
+        }
+
+        MatrixD world = grid.PositionComp.WorldMatrixRef;
+        BoundingBox local = grid.PositionComp.LocalAABB;
+        Vector3[] localCorners = local.GetCorners();
+        var origins = new Vector3D[localCorners.Length + 1];
+        for (int i = 0; i < localCorners.Length; i++)
+            origins[i] = Vector3D.Transform(localCorners[i], world);
+        origins[localCorners.Length] = Vector3D.Transform(local.Center, world);
+
+        double free = maxDistance;
+        var hits = new System.Collections.Generic.List<VRage.Game.ModAPI.IHitInfo>();
+        foreach (Vector3D origin in origins)
+        {
+            hits.Clear();
+            Sandbox.ModAPI.MyAPIGateway.Physics.CastRay(origin, origin + direction * maxDistance, hits);
+            foreach (var hit in hits)
+            {
+                var entity = hit.HitEntity?.GetTopMostParent();
+                if (entity != null && ownGrids.Contains(entity.EntityId))
+                    continue;
+                free = Math.Min(free, Math.Max(0.0, Vector3D.Dot(hit.Position - origin, direction)));
+            }
+        }
+        return free;
+    }
+
+    /// <summary>Progress metrics for the no-progress timeout.</summary>
+    public static void GetProgressSample(DockingPair pair, DockingTarget target,
+        out double connectorDistance, out double orientationMismatch, out double relativeSpeed, out double angularSpeed)
+    {
+        MyCubeGrid localGrid = pair.Local.CubeGrid;
+        MatrixD gridMatrix = localGrid.PositionComp.WorldMatrixRef;
+        connectorDistance = Vector3D.Distance(pair.Local.ConstraintPositionWorld(), pair.Target.ConstraintPositionWorld());
+        orientationMismatch = target == null
+            ? 0.0
+            : (gridMatrix.Forward - target.WorldMatrix.Forward).Length() + (gridMatrix.Up - target.WorldMatrix.Up).Length();
+        relativeSpeed = (localGrid.Physics.LinearVelocity - pair.Target.CubeGrid.Physics.LinearVelocity).Length();
+        angularSpeed = localGrid.Physics.AngularVelocity.Length();
     }
 
     private static Vector3D ClampVectorMagnitude(Vector3D vector, double maxLength)

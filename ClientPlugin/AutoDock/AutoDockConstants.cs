@@ -40,6 +40,14 @@ internal static class AutoDockConstants
         AutoDockAngularMaxTorque);
     public static float AutoDockAngularMaxTorque => GetFiniteFloat(Config.Current.AutoDockAngularMaxTorque, Config.Default.AutoDockAngularMaxTorque, 0.0001f);
     public const int AutoDockLockDelayFrames = 80;
+    public const int AutoDockConnectRetryFrames = 120;
+    public const int AutoDockMaxConnectAttempts = 5;
+    public static int AutoDockHardTimeoutFrames => GetPositiveInt(Config.Current.AutoDockHardTimeoutSeconds, Config.Default.AutoDockHardTimeoutSeconds, 10) * 60;
+    public static double RotationHullSpeed => GetFiniteDouble(Config.Current.RotationHullSpeed, Config.Default.RotationHullSpeed, 0.1);
+    public static double MaxApproachSpeed => GetFiniteDouble(Config.Current.MaxApproachSpeed, Config.Default.MaxApproachSpeed, 0.5);
+    public static double RetreatMaxSpeed => GetFiniteDouble(Config.Current.RetreatMaxSpeed, Config.Default.RetreatMaxSpeed, 0.2);
+    public static bool RetreatObstacleCheck => Config.Current.RetreatObstacleCheck;
+    public static double RetreatObstacleMargin => GetFiniteDouble(Config.Current.RetreatObstacleMargin, Config.Default.RetreatObstacleMargin, 0.0);
     public const double ManualInputDeadzone = 0.12;
     public const double MaxGravityTiltWarningRadians = Math.PI / 4.0;
     public const int LockRotationStepCount = 8;
